@@ -1,0 +1,99 @@
+{
+  "candidate": {
+    "full_name": "Your Name",
+    "email": "you@example.com",
+    "phone": "+972 50-000-0000",
+    "city": "Your City, Israel",
+    "linkedin": "https://www.linkedin.com/in/your-profile/",
+    "github": "https://github.com/your-user"
+  },
+  "base_resumes": {
+    "devops": "C:\\path\\to\\Your resume - DevOps.docx",
+    "fullstack": "C:\\path\\to\\Your resume - Full-Stack.docx"
+  },
+  "_base_resumes_note": "DevOps / Cloud / SRE / IT-DevOps / automation jobs -> devops. Full-Stack / Backend / Frontend / software engineer jobs -> fullstack.",
+  "resume_output_name": "Your Name resume",
+  "skills_heading": "Technical Skills",
+  "send_format": "pdf",
+  "target_roles": [
+    "Junior Full Stack Developer",
+    "Full Stack Developer (entry level)",
+    "Junior Backend Developer",
+    "Junior Frontend Developer",
+    "Junior Software Engineer",
+    "Junior DevOps Engineer",
+    "DevOps (entry level)",
+    "Junior Cloud Engineer",
+    "Junior SRE",
+    "IT DevOps",
+    "Automation / Scripting (PowerShell, Python)"
+  ],
+  "search_terms_en": [
+    "junior full stack",
+    "junior fullstack developer",
+    "junior devops",
+    "devops junior",
+    "junior software engineer",
+    "junior backend developer",
+    "entry level developer",
+    "graduate software engineer",
+    "junior cloud engineer",
+    "student developer"
+  ],
+  "search_terms_he": [
+    "ג'וניור פולסטאק",
+    "מפתח/ת Full Stack ג'וניור",
+    "DevOps ג'וניור",
+    "מפתח/ת ג'וניור",
+    "ללא ניסיון פיתוח",
+    "בוגרי תואר פיתוח",
+    "משרת סטודנט פיתוח",
+    "משרת סטודנט DevOps"
+  ],
+  "seniority": {
+    "max_years_required": 2,
+    "include_student_positions": true,
+    "exclude_title_words": [
+      "Senior",
+      "Sr.",
+      "Lead",
+      "Team Leader",
+      "Head",
+      "Manager",
+      "Principal",
+      "Staff",
+      "Architect",
+      "Director",
+      "בכיר",
+      "ראש צוות",
+      "מנהל"
+    ]
+  },
+  "locations": {
+    "preferred": [
+      "Tel Aviv",
+      "Ramat Gan",
+      "Herzliya",
+      "Petah Tikva"
+    ],
+    "accept_remote": true,
+    "accept_hybrid": true
+  },
+  "dedup_days": 60,
+  "pending_days": 14,
+  "max_new_jobs_per_run": 15,
+  "min_match_score": 6,
+  "screening_answers": {
+    "_note": "Answer application questions ONLY from the resume and this section. Empty value = ask the candidate, never guess.",
+    "authorized_to_work_in_israel": "",
+    "degree_status": "",
+    "notice_period": "",
+    "salary_expectation_ils_monthly": "",
+    "willing_to_relocate": "",
+    "years_professional_dev_experience": ""
+  },
+  "cover_note": {
+    "he": "שלום,\nמצורפים קורות החיים שלי למשרת {role}.\nאני מפתח Full-Stack עם ניסיון ב-{top_skills}, ואשמח להתאים את עצמי לצוות שלכם.\nתודה,\n{full_name} | {phone}",
+    "en": "Hi,\nPlease find my resume attached for the {role} position.\nI'm a full-stack developer with hands-on experience in {top_skills}, and I'd be glad to talk.\nThanks,\n{full_name} | {phone}"
+  }
+}

@@ -1,0 +1,13 @@
+# personal data - never commit
+config.json
+applications.csv
+applications/
+runs/
+drafts/
+*.docx
+*.pdf
+
+# environment
+.venv/
+__pycache__/
+*.pyc
