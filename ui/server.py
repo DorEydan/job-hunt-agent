@@ -149,8 +149,8 @@ def health():
     def add(key, label, ok, detail="", fix=""):
         items.append({"key": key, "label": label, "ok": ok, "detail": detail, "fix": fix})
 
-    add("python", "Python environment", sys.version_info >= (3, 10),
-        f"Python {sys.version.split()[0]}", "Install Python 3.10 or newer, then run start.bat again.")
+    add("python", "Python environment", sys.version_info >= (3, 11),
+        f"Python {sys.version.split()[0]}", "Install Python 3.11 or newer, then run start.bat again.")
     missing = []
     for mod in ("fontTools", "pypdf"):
         try:

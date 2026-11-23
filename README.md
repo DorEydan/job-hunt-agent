@@ -1,7 +1,7 @@
 # Job-Hunt Agent
 
 [![tests](https://github.com/DorEydan/job-hunt-agent/actions/workflows/tests.yml/badge.svg)](https://github.com/DorEydan/job-hunt-agent/actions/workflows/tests.yml)
-![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
 An AI agent, built on **Claude Code**, that runs a junior developer's job search end to end:
@@ -23,7 +23,7 @@ and sends applications **only after you approve them**. A local control panel ha
 
 | You need | For |
 |----------|-----|
-| Windows + Python 3.10+ | The tools and the control panel |
+| Windows + Python 3.11+ | The tools and the control panel |
 | Microsoft Word | Exporting the tailored resume to PDF (layout stays exactly yours) |
 | [Claude Code](https://claude.com/claude-code) (desktop app or CLI) | The agent itself |
 | Claude in Chrome extension | Sites that need your sign-in: LinkedIn, job boards, Gmail |

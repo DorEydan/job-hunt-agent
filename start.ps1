@@ -19,8 +19,8 @@ if (-not (Test-Path $venvPy)) {
 }
 
 $ver = & $venvPy -c "import sys; print('%d.%d' % sys.version_info[:2])"
-if ([version]$ver -lt [version]'3.10') {
-    Write-Host "Python $ver is too old. Install Python 3.10 or newer, delete the .venv folder and run start.bat again." -ForegroundColor Red
+if ([version]$ver -lt [version]'3.11') {
+    Write-Host "Python $ver is too old. Install Python 3.11 or newer, delete the .venv folder and run start.bat again." -ForegroundColor Red
     exit 1
 }
 
