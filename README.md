@@ -31,12 +31,12 @@ and sends applications **only after you approve them**. A local control panel ha
 ## How it works
 
 ```
- Scheduled run (Sun / Tue / Thu 09:00)
+ Scheduled run (your days and time; default Sun / Tue / Thu 09:00)
         │
         ▼
  Phase A – automatic
-   1. Search ~14 sources (LinkedIn, Indeed, local job boards, company ATS pages, Telegram, Google via Gemini…)
-   2. Filter: seniority, role type, location; score each posting 1–10 for fit
+   1. Search the sites you switched on (LinkedIn, Indeed, Glassdoor, local boards, company ATS pages, Telegram…)
+   2. Filter: role, seniority, job type, location, keywords, companies; score each posting 1–10 for fit
    3. Skip anything already applied to in the last 60 days
    4. Tailor the resume: pick the right base version, reorder skills to match the posting, export a small PDF
    5. Write a run report and wait
@@ -47,9 +47,11 @@ and sends applications **only after you approve them**. A local control panel ha
    Every application is logged: date, company, role, method
 ```
 
-| Applications | Run reports | Resumes |
+| Sites | Job search rules | Applications |
 |---|---|---|
-| ![Applications](docs/screenshot-apps.png) | ![Run reports](docs/screenshot-runs.png) | ![Resumes](docs/screenshot-resumes.png) |
+| ![Sites](docs/screenshot-sources.png) | ![Job search](docs/screenshot-search.png) | ![Applications](docs/screenshot-apps.png) |
+| **Run reports** | **Resumes** | |
+| ![Run reports](docs/screenshot-runs.png) | ![Resumes](docs/screenshot-resumes.png) | |
 
 See a full [sample run report](examples/sample-run-report.md) and a [sample application log](examples/sample-applications.csv).
 
@@ -71,7 +73,7 @@ See a full [sample run report](examples/sample-run-report.md) and a [sample appl
 
 ```
 AGENT.md                 the playbook the agent follows on every run
-sources.md               where to search and how to apply on each site (the agent adds notes as it learns)
+sources.md               search tips and notes the agent learns while running
 config.example.json      template settings  →  copied to config.json on first start
 start.bat / start.ps1    one-click setup + control panel
 ui/                      local control panel (Python standard library + one page, no framework)
@@ -89,14 +91,20 @@ git-ignored, stays on your computer:
 
 ## Customize
 
-Everything is in the control panel; under the hood it edits `config.json`.
+Everything is in the control panel; under the hood it edits `config.json`. Settings added in newer versions
+get their defaults automatically, so an older `config.json` keeps working.
 
-- **Job search:** target roles, search terms (English + local language), max years of experience, cities.
-- **Resume versions:** one is enough. Add several (e.g. `devops`, `fullstack`) and describe which jobs each is for.
-- **Screening answers:** notice period, salary expectation, etc. The agent answers forms only from these;
-  missing answers make it ask you instead of guessing.
-- **Sources:** edit `sources.md` to add job boards for your country.
-- **Language:** run reports in any language (`report_language`).
+| Tab | What you can change |
+|-----|---------------------|
+| **Profile** | Contact details used in forms and emails; the language of run reports |
+| **Job search** | Target roles; search terms in English and your local language; max years of experience; words that disqualify a title; job types (full-time, part-time, student, internship, contract, freelance); keywords a job must mention or must not mention; companies to never apply to; search location, cities, remote/hybrid; how many days back to look; max jobs per run; minimum match score; re-apply and re-offer windows |
+| **Sites** | Switch each site on or off, reorder them (the agent searches in this order), edit how each one is searched and applied to, or add new ones: 17 ready-made sites (LinkedIn, Indeed, Glassdoor, Wellfound, Built In, Welcome to the Jungle, Remote OK, We Work Remotely, Hacker News "Who is hiring", company ATS pages, Gemini search, Telegram, Facebook groups, and Israeli boards) or any custom site. Search links take `{query}`, `{location}`, `{days}` and `{seconds}` |
+| **Resumes** | One or more resume versions (e.g. `devops`, `fullstack`) and which jobs each is for; the skills heading; the name of the sent PDF; a test export |
+| **Applying** | Which ways of applying are allowed (quick apply, job-board send-CV, company forms, email, social messages); whether to paste the cover note into optional fields; notifications; screening answers; cover notes per language |
+| **Schedule** | Days and time (presets: 3× a week, 2× a week, workdays, daily). It generates the exact text to paste into Claude Code to create or update the scheduled task, and warns if the look-back window is shorter than the gap between runs |
+
+Fixed on purpose: nothing is sent without your approval, and the agent never solves CAPTCHAs, creates accounts or
+types passwords. New sites the agent discovers are added switched off, for you to review.
 
 ## Command line
 
@@ -110,7 +118,7 @@ Everything is in the control panel; under the hood it edits `config.json`.
 ## Rules the agent keeps
 
 No CAPTCHA solving, no account creation, no passwords: those jobs are handed back to you.
-At most 15 new jobs per run, at a human pace on LinkedIn. Details in [AGENT.md](AGENT.md).
+A capped number of new jobs per run (default 15), at a human pace on LinkedIn. Details in [AGENT.md](AGENT.md).
 
 ## License
 

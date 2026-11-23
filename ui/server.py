@@ -33,7 +33,6 @@ MAX_BODY = 1_000_000
 STATUSES = ["prepared", "sent", "manual", "failed", "skipped"]
 RUN_NAME = re.compile(r"\d{4}-\d{2}-\d{2}[A-Za-z0-9_-]*\.md")  # always used with fullmatch
 VARIANT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,39}")  # always used with fullmatch
-SCHEDULE_CRON = "0 9 * * 0,2,4"
 
 _word_check = {"done": False, "ok": None, "detail": ""}
 _tool_lock = threading.Lock()  # Word COM, the CSV and .preview are not safe for parallel use
@@ -44,9 +43,13 @@ _word_lock = threading.Lock()
 # ---------- helpers ----------
 
 def read_config():
-    if CONFIG_PATH.exists():
-        return json.loads(CONFIG_PATH.read_text(encoding="utf-8")), True
-    return json.loads(EXAMPLE_PATH.read_text(encoding="utf-8")), False
+    example = json.loads(EXAMPLE_PATH.read_text(encoding="utf-8"))
+    if not CONFIG_PATH.exists():
+        return example, False
+    cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    for k, v in example.items():  # settings added in newer versions get their defaults
+        cfg.setdefault(k, v)
+    return cfg, True
 
 
 STR_LISTS = ["target_roles", "search_terms_en", "search_terms_local"]
@@ -99,7 +102,77 @@ def validate_config(cfg):
     loc = cfg.get("locations", {})
     if not isinstance(loc, dict):
         errs.append("locations: must be an object.")
+    errs += validate_extras(cfg)
     return errs
+
+
+DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]
+TIME = re.compile(r"([01]\d|2[0-3]):([0-5]\d)")
+SOURCE_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
+BOOL_MAPS = ["job_types", "apply_methods"]
+EXTRA_STR_LISTS = ["must_have_keywords", "exclude_keywords", "exclude_companies"]
+
+
+def validate_extras(cfg):
+    """The customization settings: schedule, rules, apply methods and the site list."""
+    errs = []
+    sch = cfg.get("schedule", {"days": ["mon"], "time": "09:00"})
+    if not isinstance(sch, dict) or not isinstance(sch.get("days"), list) or not sch["days"] \
+            or any(d not in DAYS for d in sch["days"]):
+        errs.append("schedule: pick at least one day.")
+    if not isinstance(sch, dict) or not isinstance(sch.get("time"), str) or not TIME.fullmatch(sch["time"]):
+        errs.append("schedule: time must look like 09:00.")
+    w = cfg.get("search_window_days", 3)
+    if not isinstance(w, int) or isinstance(w, bool) or not 1 <= w <= 60:
+        errs.append("search_window_days: a whole number from 1 to 60.")
+    for k in BOOL_MAPS:
+        v = cfg.get(k, {})
+        if not isinstance(v, dict) or not all(isinstance(x, bool) for x in v.values()):
+            errs.append(f"{k}: every option must be on or off.")
+    for k in EXTRA_STR_LISTS:
+        v = cfg.get(k, [])
+        if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+            errs.append(f"{k}: must be a list of text lines.")
+    if not isinstance(cfg.get("search_location", ""), str):
+        errs.append("search_location: must be text.")
+    for k in ("cover_note_in_forms", "notifications"):
+        if not isinstance(cfg.get(k, True), bool):
+            errs.append(f"{k}: must be on or off.")
+    sources = cfg.get("sources", [])
+    if not isinstance(sources, list):
+        return errs + ["sources: must be a list of sites."]
+    seen = set()
+    for i, s in enumerate(sources, 1):
+        if not isinstance(s, dict):
+            errs.append(f"Site {i}: invalid entry.")
+            continue
+        sid, name = s.get("id"), s.get("name")
+        if not isinstance(sid, str) or not SOURCE_ID.fullmatch(sid):
+            errs.append(f"Site {i}: id must be lowercase letters, digits or -.")
+        elif sid in seen:
+            errs.append(f"Site {i}: id '{sid}' is used twice.")
+        seen.add(sid)
+        if not isinstance(name, str) or not name.strip() or len(name) > 80:
+            errs.append(f"Site {i}: needs a name (up to 80 characters).")
+        for b in ("enabled", "needs_signin"):
+            if not isinstance(s.get(b), bool):
+                errs.append(f"Site {i}: '{b}' must be on or off.")
+        for t in ("search", "apply", "notes"):
+            if not isinstance(s.get(t, ""), str) or len(s.get(t, "")) > 2000:
+                errs.append(f"Site {i}: '{t}' must be text (up to 2000 characters).")
+    return errs
+
+
+def schedule_info(cfg):
+    """Cron line, a readable summary and the longest gap between runs (for the search window)."""
+    sch = cfg.get("schedule") or {}
+    days = [d for d in DAYS if d in (sch.get("days") or [])] or ["sun", "tue", "thu"]
+    t = sch.get("time") if isinstance(sch.get("time"), str) and TIME.fullmatch(sch.get("time")) else "09:00"
+    hh, mm = t.split(":")
+    idx = [DAYS.index(d) for d in days]
+    gaps = [((idx[(i + 1) % len(idx)] - idx[i]) % 7) or 7 for i in range(len(idx))]
+    return {"cron": f"{int(mm)} {int(hh)} * * {','.join(map(str, idx))}",
+            "days": days, "time": t, "max_gap_days": max(gaps)}
 
 
 def write_config(cfg):
@@ -176,6 +249,10 @@ def health():
         "Resumes tab: set the path of your .docx resume." + (f" Not found: {', '.join(bad)}." if bad else ""))
     if sample and not bad:
         items[-1]["warn"] = "You are still using the sample resume. Point this to your own .docx."
+    srcs = cfg.get("sources") or []
+    on = [s.get("name", "") for s in srcs if isinstance(s, dict) and s.get("enabled")]
+    add("sites", "Sites to search", bool(on), f"{len(on)} of {len(srcs)} on" if on else "",
+        "Sites tab: switch on at least one site.")
     claude = shutil.which("claude")
     add("claude", "Claude Code installed", True if claude else None,
         "claude CLI found" if claude else "Using the Claude desktop app is fine too.",
@@ -294,7 +371,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, pdfs[0].read_bytes(), "application/pdf",
                                   {"Content-Disposition": "inline; filename=preview.pdf"})
             if path == "/api/schedule":
-                return self._send(200, {"prompt": schedule_prompt(), "cron": SCHEDULE_CRON, "folder": str(ROOT)})
+                cfg, _ = read_config()
+                return self._send(200, {"prompt": schedule_prompt(), "folder": str(ROOT), **schedule_info(cfg)})
             return self._send(404, {"error": "Not found"})
         except ValueError as e:
             return self._send(400, {"error": str(e)})

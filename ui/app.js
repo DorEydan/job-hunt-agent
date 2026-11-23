@@ -1,8 +1,34 @@
 const TABS = [
-  ["home", "Home"], ["profile", "Profile"], ["search", "Job search"], ["resumes", "Resumes"],
-  ["answers", "Answers & notes"], ["apps", "Applications"], ["runs", "Run reports"], ["automate", "Automate"],
+  ["home", "Home"], ["profile", "Profile"], ["search", "Job search"], ["sources", "Sites"], ["resumes", "Resumes"],
+  ["answers", "Applying"], ["automate", "Schedule"], ["apps", "Applications"], ["runs", "Run reports"],
 ];
-const CONFIG_TABS = new Set(["profile", "search", "resumes", "answers"]);
+const CONFIG_TABS = new Set(["profile", "search", "sources", "resumes", "answers", "automate"]);
+const DAYS = [["sun", "Sun"], ["mon", "Mon"], ["tue", "Tue"], ["wed", "Wed"], ["thu", "Thu"], ["fri", "Fri"], ["sat", "Sat"]];
+const JOB_TYPES = [["full_time", "Full-time"], ["part_time", "Part-time"], ["student", "Student positions"],
+  ["internship", "Internships"], ["contract", "Contract"], ["freelance", "Freelance"]];
+const APPLY_METHODS = [["easy_apply", "Quick apply on job sites (LinkedIn Easy Apply, Indeed, Glassdoor)"],
+  ["job_board_send_cv", "Send-CV buttons on job boards"], ["ats_forms", "Company application forms (Comeet, Greenhouse, Lever…)"],
+  ["email", "Email the resume from your mailbox"], ["social_dm", "Message the poster on Facebook / LinkedIn"]];
+// Ready-made sites for "Add site". {query} {location} {days} {seconds} are filled in by the agent.
+const PRESETS = [
+  { id: "linkedin", name: "LinkedIn Jobs", needs_signin: true, search: "https://www.linkedin.com/jobs/search/?keywords={query}&location={location}&f_TPR=r{seconds}&f_E=1%2C2", apply: "Easy Apply, or the external link to the company site.", notes: "f_E=1,2 = internship + entry level. Work at a human pace." },
+  { id: "indeed", name: "Indeed", needs_signin: false, search: "https://www.indeed.com/jobs?q={query}&l={location}&fromage={days}", apply: "Indeed Apply, or the company site.", notes: "Use your country's Indeed domain (e.g. il.indeed.com, uk.indeed.com)." },
+  { id: "glassdoor", name: "Glassdoor", needs_signin: true, search: "https://www.glassdoor.com/Job/jobs.htm?sc.keyword={query}&fromAge={days}", apply: "Easy Apply on Glassdoor when the job has it; otherwise apply on the company site.", notes: "Set your location once in Glassdoor's filter. Skip the run if a bot check appears." },
+  { id: "wellfound", name: "Wellfound (startups)", needs_signin: true, search: "https://wellfound.com/jobs", apply: "Company ATS form, or skip if it needs an account.", notes: "" },
+  { id: "builtin", name: "Built In", needs_signin: false, search: "https://builtin.com/jobs (filter: entry level)", apply: "Company ATS form.", notes: "" },
+  { id: "welcome-to-the-jungle", name: "Welcome to the Jungle", needs_signin: false, search: "https://www.welcometothejungle.com/en/jobs?query={query}", apply: "Company form.", notes: "" },
+  { id: "remoteok", name: "Remote OK", needs_signin: false, search: "https://remoteok.com/remote-{query}-jobs", apply: "The link in the post.", notes: "Remote jobs only." },
+  { id: "weworkremotely", name: "We Work Remotely", needs_signin: false, search: "https://weworkremotely.com/remote-jobs/search?term={query}", apply: "The link in the post.", notes: "Remote jobs only." },
+  { id: "hn-whos-hiring", name: "Hacker News: Who is hiring", needs_signin: false, search: "The latest 'Ask HN: Who is hiring?' thread on news.ycombinator.com; look for junior / entry-level posts in {location} or remote.", apply: "Email or link in the comment.", notes: "Monthly thread." },
+  { id: "company-ats", name: "Company career pages (ATS)", needs_signin: false, search: "Web search: site:job-boards.greenhouse.io {query} {location} / site:jobs.lever.co {query} / site:jobs.ashbyhq.com {query} / site:comeet.com {query}", apply: "The company's form (never create an account).", notes: "" },
+  { id: "gemini", name: "Gemini (Google search)", needs_signin: false, search: "Ask the Gemini tool to Google junior postings for {query} in {location} from the last {days} days; return company, title, location, URL, date only. Search terms only, never personal details.", apply: "Discovery only: open every link and apply at the original source.", notes: "Needs the Gemini CLI MCP server." },
+  { id: "alljobs", name: "AllJobs (Israel)", needs_signin: true, search: "alljobs.co.il search box, newest first.", apply: "The site's send-CV button.", notes: "" },
+  { id: "drushim", name: "Drushim (Israel)", needs_signin: true, search: "drushim.co.il search, newest first.", apply: "The site's send-CV button.", notes: "" },
+  { id: "jobmaster", name: "JobMaster (Israel)", needs_signin: true, search: "jobmaster.co.il search.", apply: "The site's send-CV button.", notes: "" },
+  { id: "misrotech", name: "MisroTech (Israel)", needs_signin: false, search: "https://misrotech.com/en/r/fullstack/junior", apply: "Follow the link to the company page.", notes: "Collects company career pages." },
+  { id: "facebook-groups", name: "Facebook groups", needs_signin: true, search: "Recent posts in job groups you are already a member of.", apply: "Usually by email from the post.", notes: "Never joins, comments or posts." },
+  { id: "telegram", name: "Telegram channel", needs_signin: false, search: "https://t.me/s/<channel-name>", apply: "The link or email in the post.", notes: "Replace <channel-name>." },
+];
 let state = { tab: "home", cfg: null, saved: null, exists: false, folder: "", apps: [], statuses: [], filter: "all", q: "" };
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -90,7 +116,7 @@ pages.home = async () => {
   $("#stats").innerHTML = [["sent", "Sent"], ["prepared", "Waiting for approval"], ["manual", "Need you"], ["failed", "Failed"]]
     .map(([k, l]) => `<div class="stat"><b>${s[k]}</b><span>${l}</span></div>`).join("");
   const { items } = await api("/api/health");
-  const goTo = { config: "profile", profile: "profile", resumes: "resumes" };
+  const goTo = { config: "profile", profile: "profile", resumes: "resumes", sites: "sources" };
   $("#health").innerHTML = items.map(it => {
     const cls = it.ok === true ? (it.warn ? "warn" : "ok") : it.ok === null ? "na" : "bad";
     const mark = it.ok === true ? (it.warn ? "!" : "✓") : it.ok === null ? "–" : "✕";
@@ -122,11 +148,22 @@ pages.search = () => {
     ${field("seniority.exclude_title_words", "Skip titles containing", { type: "lines" })}
     <div>${field("seniority.include_student_positions", "Include student positions", { type: "bool" })}</div>
   </div></div>
+  <div class="card"><h3>Job types</h3><div class="grid">
+    <div>${JOB_TYPES.slice(0, 3).map(([k, l]) => field("job_types." + k, l, { type: "bool" })).join("")}</div>
+    <div>${JOB_TYPES.slice(3).map(([k, l]) => field("job_types." + k, l, { type: "bool" })).join("")}</div>
+  </div></div>
+  <div class="card"><h3>Keywords and companies</h3><div class="grid">
+    ${field("must_have_keywords", "Must mention at least one of", { type: "lines", hint: "Optional. Empty = no requirement. E.g. React, Python." })}
+    ${field("exclude_keywords", "Skip jobs that mention", { type: "lines", hint: "E.g. security clearance, night shifts." })}
+    ${field("exclude_companies", "Never apply to these companies", { type: "lines", hint: "E.g. your current employer." })}
+  </div></div>
   <div class="card"><h3>Location</h3><div class="grid">
+    ${field("search_location", "Search location", { ph: "Israel", hint: "Used in site searches ({location})." })}
     ${field("locations.preferred", "Preferred cities", { type: "lines" })}
     <div>${field("locations.accept_remote", "Remote jobs are OK", { type: "bool" })}${field("locations.accept_hybrid", "Hybrid jobs are OK", { type: "bool" })}</div>
   </div></div>
   <div class="card"><h3>Limits</h3><div class="grid">
+    ${field("search_window_days", "Look at postings from the last (days)", { type: "int", hint: "Match it to the longest gap between runs (see Schedule)." })}
     ${field("max_new_jobs_per_run", "Max new jobs per run", { type: "int" })}
     ${field("min_match_score", "Minimum match score (1–10)", { type: "int" })}
     ${field("dedup_days", "Don't re-apply to the same job for (days)", { type: "int" })}
@@ -172,7 +209,16 @@ pages.resumes = () => {
 };
 
 pages.answers = () => {
-  $("#main").innerHTML = `<h2>Answers & notes</h2><p class="lead">Application forms often ask the same questions. The agent answers only from here. If an answer is missing, it asks you instead of guessing.</p>
+  $("#main").innerHTML = `<h2>Applying</h2><p class="lead">How the agent may apply, and what it answers on forms. It answers only from here; if an answer is missing, it asks you instead of guessing.</p>
+  <div class="card"><h3>Allowed ways to apply</h3>
+    ${APPLY_METHODS.map(([k, l]) => field("apply_methods." + k, l, { type: "bool" })).join("")}
+    <div class="hint">Jobs that can only be applied to in a way you switched off are listed for you to apply yourself.</div>
+  </div>
+  <div class="card"><h3>Options</h3>
+    ${field("cover_note_in_forms", "Paste the cover note into optional cover-letter fields", { type: "bool" })}
+    ${field("notifications", "Notify me when a run finds jobs", { type: "bool" })}
+    <div class="check sub"><span class="dot ok" style="width:16px;height:16px;font-size:10px">✓</span> Always on: nothing is sent until you approve it in the chat.</div>
+  </div>
   <div class="card"><h3>Screening answers</h3>
     ${kvEditor("screening_answers", "Question (short key)", "Your answer", { ph: "e.g. 30 days" })}
     <div class="hint">Examples: <i>notice_period</i>, <i>salary_expectation</i>, <i>authorized_to_work</i>, <i>years_experience</i>, <i>willing_to_relocate</i>. Empty = the agent will ask you.</div>
@@ -240,20 +286,124 @@ pages.runs = async () => {
   if (runs.length) { $("#run").addEventListener("change", e => show(e.target.value)); show(runs[0]); }
 };
 
+function scheduleInfo() {  // mirrors schedule_info() in server.py
+  const sch = get("schedule") || {};
+  const days = DAYS.map(d => d[0]).filter(d => (sch.days || []).includes(d));
+  const time = /^([01]\d|2[0-3]):[0-5]\d$/.test(sch.time || "") ? sch.time : "09:00";
+  const idx = days.map(d => DAYS.findIndex(x => x[0] === d));
+  const gaps = idx.map((v, i) => ((idx[(i + 1) % idx.length] - v + 7) % 7) || 7);
+  const [hh, mm] = time.split(":").map(Number);
+  return { days, time, cron: `${mm} ${hh} * * ${idx.join(",")}`, maxGap: gaps.length ? Math.max(...gaps) : 0 };
+}
+
 pages.automate = async () => {
   const s = await api("/api/schedule");
-  $("#main").innerHTML = `<h2>Automate</h2><p class="lead">The agent runs inside Claude Code. Set it up once and it searches on its own; sending always waits for your approval.</p>
-  <div class="card"><h3>1. Try one run now</h3><p class="sub">Open Claude Code in this folder and paste:</p>
+  const draw = () => {
+    const info = scheduleInfo(); const sch = get("schedule") || {};
+    const names = info.days.map(d => DAYS.find(x => x[0] === d)[1]).join(", ");
+    const win = get("search_window_days");
+    $("#schedOut").innerHTML = info.days.length ? `
+      <p class="sub">Runs <b>${esc(names)}</b> at <b>${esc(info.time)}</b> · cron <code>${esc(info.cron)}</code>
+      ${win < info.maxGap ? `<br><span class="msg warn">The longest gap between runs is ${info.maxGap} days, but searches look back only ${win}. <a href="#" id="fixWin">Set it to ${info.maxGap}</a></span>` : ""}</p>
+      <p class="sub" style="margin-top:14px">New schedule: paste in Claude Code</p>
+      <pre class="prompt" id="sched">Create a scheduled task named "job-hunt-agent" that runs at cron "${esc(info.cron)}" with this prompt: ${esc(s.prompt)}</pre>
+      <button class="btn" data-copy="sched">Copy</button>
+      <p class="sub" style="margin-top:14px">Already scheduled? Paste this to change it</p>
+      <pre class="prompt" id="resched">Update the scheduled task "job-hunt-agent" to run at cron "${esc(info.cron)}".</pre>
+      <button class="btn" data-copy="resched">Copy</button>`
+      : `<p class="msg warn">Pick at least one day.</p>`;
+    $("#fixWin")?.addEventListener("click", e => { e.preventDefault(); set("search_window_days", info.maxGap); draw(); });
+  };
+  const sch = get("schedule") || {};
+  $("#main").innerHTML = `<h2>Schedule</h2><p class="lead">The agent runs inside Claude Code on this schedule. Sending always waits for your approval.</p>
+  <div class="card"><h3>When to search</h3>
+    <div class="row" id="dayPick">${DAYS.map(([k, l]) => `<label class="daychip"><input type="checkbox" value="${k}" ${(sch.days || []).includes(k) ? "checked" : ""}> ${l}</label>`).join("")}</div>
+    <div class="row" style="margin-top:12px"><label for="schedTime" style="margin:0">Time</label>
+      <input type="time" id="schedTime" value="${esc(sch.time || "09:00")}" style="max-width:140px">
+      <span class="sub">Presets:</span>
+      <button class="btn" data-preset="sun,tue,thu">3× a week</button><button class="btn" data-preset="mon,thu">2× a week</button>
+      <button class="btn" data-preset="sun,mon,tue,wed,thu">Workdays (Sun–Thu)</button><button class="btn" data-preset="mon,tue,wed,thu,fri">Workdays (Mon–Fri)</button>
+      <button class="btn" data-preset="sun,mon,tue,wed,thu,fri,sat">Daily</button></div>
+    <div id="schedOut" style="margin-top:12px"></div>
+  </div>
+  <div class="card"><h3>Try one run now</h3><p class="sub">Open Claude Code and paste:</p>
     <pre class="prompt" id="prompt">${esc(s.prompt)}</pre><button class="btn" data-copy="prompt">Copy</button></div>
-  <div class="card"><h3>2. Schedule it</h3><p class="sub">In Claude Code, paste this to create the schedule (Sunday, Tuesday and Thursday at 09:00 — change it if you like):</p>
-    <pre class="prompt" id="sched">Create a scheduled task named "job-hunt-agent" that runs at cron "${esc(s.cron)}" with this prompt: ${esc(s.prompt)}</pre>
-    <button class="btn" data-copy="sched">Copy</button></div>
-  <div class="card"><h3>3. Before each run</h3><ol class="steps">
+  <div class="card"><h3>Before each run</h3><ol class="steps">
     <li><b>Computer on</b> and the Claude app open at the scheduled time.</li>
-    <li><b>Chrome open</b> with the Claude in Chrome extension connected, for sites that need your sign-in (LinkedIn, job boards, Gmail).</li>
-    <li><b>Signed in</b> to LinkedIn and your email in that Chrome. The agent never types passwords.</li>
+    <li><b>Chrome open</b> with the Claude in Chrome extension connected, for sites marked "sign-in" (LinkedIn, Glassdoor, job boards, Gmail).</li>
+    <li><b>Signed in</b> to those sites in that Chrome. The agent never types passwords.</li>
     <li>When a run finishes you get the list of jobs. Reply e.g. <i>send 1,3,5</i> or <i>send all</i>.</li></ol></div>`;
+  const setDays = days => { set("schedule", { ...(get("schedule") || {}), days }); };
+  $("#dayPick").addEventListener("change", () => { setDays([...$("#dayPick").querySelectorAll("input:checked")].map(i => i.value)); draw(); });
+  $("#schedTime").addEventListener("input", e => { set("schedule", { ...(get("schedule") || {}), time: e.target.value }); draw(); });
+  $("#main").querySelectorAll("[data-preset]").forEach(b => b.addEventListener("click", () => {
+    const days = b.dataset.preset.split(","); setDays(days);
+    $("#dayPick").querySelectorAll("input").forEach(i => i.checked = days.includes(i.value)); draw();
+  }));
+  draw();
 };
+
+pages.sources = () => {
+  const list = get("sources") || [];
+  const have = new Set(list.map(s => s.id));
+  const on = list.filter(s => s.enabled).length;
+  $("#main").innerHTML = `<h2>Sites</h2><p class="lead">Where the agent searches, in this order. Switch sites on or off, edit how each is searched, or add new ones. ${on} of ${list.length} on.</p>
+  <div class="card"><div class="row">
+    <select id="preset" style="max-width:300px"><option value="">Add a ready-made site…</option>
+      ${PRESETS.filter(p => !have.has(p.id)).map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("")}</select>
+    <button class="btn" id="addPreset">Add</button><button class="btn" id="addCustom">+ Custom site</button>
+  </div>
+  <div class="hint" style="margin-top:8px">In search links, <code>{query}</code> is a search term, <code>{location}</code> your search location, <code>{days}</code> the look-back window (<code>{seconds}</code> in seconds).</div></div>
+  <div id="srcList">${list.map((s, i) => `
+    <div class="card src ${s.enabled ? "" : "off"}" data-i="${i}">
+      <div class="row">
+        <label class="switch" title="On / off"><input type="checkbox" data-sf="enabled" ${s.enabled ? "checked" : ""}><span></span></label>
+        <b style="flex:1;min-width:140px">${esc(s.name)}</b>
+        ${s.needs_signin ? `<span class="pill">sign-in</span>` : `<span class="pill">public</span>`}
+        <button class="icon-btn mv" data-mv="-1" title="Move up" ${i === 0 ? "disabled" : ""}>↑</button>
+        <button class="icon-btn mv" data-mv="1" title="Move down" ${i === list.length - 1 ? "disabled" : ""}>↓</button>
+        <button class="btn" data-edit>${state.openSrc === s.id ? "Close" : "Edit"}</button>
+        <button class="icon-btn" data-del title="Remove">×</button>
+      </div>
+      ${state.openSrc === s.id ? `<div class="grid" style="margin-top:12px">
+        <div><label>Name</label><input type="text" data-sf="name" value="${esc(s.name)}"></div>
+        <div><label>Id</label><input type="text" data-sf="id" value="${esc(s.id)}"><div class="hint">Lowercase letters, digits, -.</div></div>
+        <div style="grid-column:1/-1"><label>How to search (link or instructions)</label><textarea data-sf="search" style="min-height:70px">${esc(s.search)}</textarea></div>
+        <div><label>How to apply</label><textarea data-sf="apply" style="min-height:70px">${esc(s.apply)}</textarea></div>
+        <div><label>Notes for the agent</label><textarea data-sf="notes" style="min-height:70px">${esc(s.notes)}</textarea></div>
+        <div><label class="check"><input type="checkbox" data-sf="needs_signin" ${s.needs_signin ? "checked" : ""}> Needs my sign-in (opened in my Chrome)</label></div>
+      </div>` : `<div class="sub" style="margin-top:6px;overflow-wrap:anywhere">${esc(s.search)}</div>`}
+    </div>`).join("") || `<div class="card empty">No sites yet. Add one above.</div>`}</div>`;
+
+  const save = arr => set("sources", arr);
+  const copy = () => (get("sources") || []).map(x => ({ ...x }));
+  $("#addPreset").addEventListener("click", () => {
+    const p = PRESETS.find(x => x.id === $("#preset").value); if (!p) return;
+    save([...copy(), { ...p, enabled: true }]); state.openSrc = p.id; render();
+  });
+  $("#addCustom").addEventListener("click", () => {
+    let id = "custom", n = 1; const ids = new Set(copy().map(x => x.id)); while (ids.has(id)) id = "custom-" + ++n;
+    save([...copy(), { id, name: "New site", enabled: true, needs_signin: false, search: "https://", apply: "", notes: "" }]);
+    state.openSrc = id; render();
+  });
+  $("#srcList").addEventListener("click", e => {
+    const card = e.target.closest("[data-i]"); if (!card) return; const i = +card.dataset.i; const arr = copy();
+    if (e.target.closest("[data-del]")) { if (confirm(`Remove ${arr[i].name}?`)) { arr.splice(i, 1); save(arr); render(); } }
+    else if (e.target.closest("[data-mv]")) { const j = i + +e.target.closest("[data-mv]").dataset.mv; [arr[i], arr[j]] = [arr[j], arr[i]]; save(arr); render(); }
+    else if (e.target.closest("[data-edit]")) { state.openSrc = state.openSrc === arr[i].id ? null : arr[i].id; render(); }
+  });
+  const onField = e => {
+    const el = e.target.closest("[data-sf]"); if (!el) return;
+    const card = el.closest("[data-i]"); const i = +card.dataset.i; const arr = copy(); const k = el.dataset.sf;
+    arr[i][k] = el.type === "checkbox" ? el.checked : el.value;
+    if (k === "id") state.openSrc = el.value;
+    save(arr);
+    if (k === "enabled") card.classList.toggle("off", !el.checked);
+  };
+  $("#srcList").addEventListener("input", onField);
+  $("#srcList").addEventListener("change", e => { onField(e); if (e.target.dataset.sf === "enabled" || e.target.dataset.sf === "needs_signin") render(); });
+};
+
 document.addEventListener("click", async e => {
   const b = e.target.closest && e.target.closest("[data-copy]"); if (!b) return;
   try { await navigator.clipboard.writeText($("#" + b.dataset.copy).textContent); toast("Copied"); } catch (err) { toast("Select the text and copy it"); }
@@ -269,6 +419,9 @@ $("#save").addEventListener("click", async () => {
   } catch (err) { alert(err.message); }
 });
 $("#discard").addEventListener("click", () => { state.cfg = JSON.parse(state.saved); updateSavebar(); render(); });
+window.addEventListener("hashchange", () => {
+  const t = location.hash.slice(1); if (t !== state.tab && TABS.some(x => x[0] === t)) go(t);
+});
 window.addEventListener("beforeunload", e => { if (dirty()) { e.preventDefault(); e.returnValue = ""; } });
 
 async function render() {

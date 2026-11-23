@@ -112,6 +112,52 @@ class ServerValidation(unittest.TestCase):
         self.assertFalse(server.check_resume_path("x", r"C:\docs\cv.docx"))
 
 
+class Customization(unittest.TestCase):
+    def cfg(self):
+        return json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))
+
+    def test_example_has_glassdoor_and_settings(self):
+        c = self.cfg()
+        self.assertIn("glassdoor", [s["id"] for s in c["sources"]])
+        for k in ("schedule", "search_window_days", "job_types", "apply_methods", "exclude_companies"):
+            self.assertIn(k, c)
+
+    def test_schedule_cron_and_gap(self):
+        info = server.schedule_info({"schedule": {"days": ["thu", "mon"], "time": "18:30"}})
+        self.assertEqual(info["cron"], "30 18 * * 1,4")
+        self.assertEqual(info["max_gap_days"], 4)  # Thursday -> Monday
+        self.assertEqual(server.schedule_info({"schedule": {"days": ["wed"], "time": "07:05"}})["max_gap_days"], 7)
+
+    def test_bad_schedule_rejected(self):
+        c = self.cfg()
+        c["schedule"] = {"days": [], "time": "25:00"}
+        self.assertEqual(len(server.validate_extras(c)), 2)
+        c["schedule"] = {"days": ["funday"], "time": "09:00"}
+        self.assertEqual(len(server.validate_extras(c)), 1)
+
+    def test_bad_sources_rejected(self):
+        c = self.cfg()
+        c["sources"][0]["id"] = "Bad Id"
+        c["sources"].append(dict(c["sources"][1]))  # duplicate id
+        c["sources"][2]["enabled"] = "yes"
+        errs = server.validate_extras(c)
+        self.assertEqual(len(errs), 3, errs)
+
+    def test_old_config_gets_new_defaults(self):
+        backup = CONFIG.read_text(encoding="utf-8")
+        try:
+            old = json.loads(backup)
+            for k in ("sources", "schedule", "job_types"):
+                old.pop(k, None)
+            CONFIG.write_text(json.dumps(old), encoding="utf-8")
+            cfg, exists = server.read_config()
+            self.assertTrue(exists)
+            self.assertIn("sources", cfg)
+            self.assertEqual(server.validate_config(cfg), [])
+        finally:
+            CONFIG.write_text(backup, encoding="utf-8")
+
+
 class ServerGuards(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

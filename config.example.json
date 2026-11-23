@@ -8,6 +8,16 @@
     "github": "https://github.com/your-user"
   },
   "report_language": "English",
+  "schedule": {
+    "days": [
+      "sun",
+      "tue",
+      "thu"
+    ],
+    "time": "09:00"
+  },
+  "search_window_days": 3,
+  "search_location": "Israel",
   "base_resumes": {
     "default": "examples/sample-resume.docx"
   },
@@ -69,6 +79,19 @@
       "מנהל"
     ]
   },
+  "job_types": {
+    "full_time": true,
+    "part_time": false,
+    "student": true,
+    "internship": true,
+    "contract": false,
+    "freelance": false
+  },
+  "must_have_keywords": [],
+  "exclude_keywords": [
+    "security clearance"
+  ],
+  "exclude_companies": [],
   "locations": {
     "preferred": [
       "Tel Aviv",
@@ -92,8 +115,136 @@
     "willing_to_relocate": "",
     "years_professional_dev_experience": ""
   },
+  "apply_methods": {
+    "easy_apply": true,
+    "job_board_send_cv": true,
+    "ats_forms": true,
+    "email": true,
+    "social_dm": false
+  },
+  "cover_note_in_forms": true,
+  "notifications": true,
   "cover_note": {
     "he": "שלום,\nמצורפים קורות החיים שלי למשרת {role}.\nאני מפתח Full-Stack עם ניסיון ב-{top_skills}, ואשמח להתאים את עצמי לצוות שלכם.\nתודה,\n{full_name} | {phone}",
     "en": "Hi,\nPlease find my resume attached for the {role} position.\nI'm a developer with hands-on experience in {top_skills}, and I'd be glad to talk.\nThanks,\n{full_name} | {phone}"
-  }
+  },
+  "sources": [
+    {
+      "id": "linkedin",
+      "name": "LinkedIn Jobs",
+      "enabled": true,
+      "needs_signin": true,
+      "search": "https://www.linkedin.com/jobs/search/?keywords={query}&location={location}&f_TPR=r{seconds}&f_E=1%2C2",
+      "apply": "Easy Apply, or the external link to the company site.",
+      "notes": "f_E=1,2 = internship + entry level. Work at a human pace: LinkedIn restricts accounts that act like bots."
+    },
+    {
+      "id": "indeed",
+      "name": "Indeed",
+      "enabled": true,
+      "needs_signin": false,
+      "search": "https://il.indeed.com/jobs?q={query}&l={location}&fromage={days}",
+      "apply": "Indeed Apply, or the company site.",
+      "notes": "Change il.indeed.com to your country's Indeed. If a 'verify you are human' check appears, skip Indeed this run."
+    },
+    {
+      "id": "glassdoor",
+      "name": "Glassdoor",
+      "enabled": true,
+      "needs_signin": true,
+      "search": "https://www.glassdoor.com/Job/jobs.htm?sc.keyword={query}&fromAge={days}",
+      "apply": "Easy Apply on Glassdoor when the job has it; otherwise follow the link and apply on the company site.",
+      "notes": "Set your location once in Glassdoor's filter (or add its location parameters from the URL). If a bot check appears, skip Glassdoor this run."
+    },
+    {
+      "id": "alljobs",
+      "name": "AllJobs",
+      "enabled": true,
+      "needs_signin": true,
+      "search": "alljobs.co.il search box with the local and English terms, sorted by newest.",
+      "apply": "The site's send-CV button on the job page.",
+      "notes": "Israel."
+    },
+    {
+      "id": "drushim",
+      "name": "Drushim",
+      "enabled": true,
+      "needs_signin": true,
+      "search": "drushim.co.il search, newest first.",
+      "apply": "The site's send-CV button.",
+      "notes": "Israel."
+    },
+    {
+      "id": "jobmaster",
+      "name": "JobMaster",
+      "enabled": true,
+      "needs_signin": true,
+      "search": "jobmaster.co.il search.",
+      "apply": "The site's send-CV button.",
+      "notes": "Israel."
+    },
+    {
+      "id": "misrotech",
+      "name": "MisroTech",
+      "enabled": true,
+      "needs_signin": false,
+      "search": "https://misrotech.com/en/r/fullstack/junior , /en/r/devops/junior , /en/r/backend/junior",
+      "apply": "Follow the link to the original company page or email.",
+      "notes": "Israel. Collects postings from company career pages; shows the date each was found."
+    },
+    {
+      "id": "company-ats",
+      "name": "Company career pages (ATS)",
+      "enabled": true,
+      "needs_signin": false,
+      "search": "Web search: site:comeet.com {query} {location} / site:job-boards.greenhouse.io {query} / site:jobs.lever.co {query} / site:jobs.ashbyhq.com {query}",
+      "apply": "The company's ATS form (never create an account).",
+      "notes": ""
+    },
+    {
+      "id": "facebook-groups",
+      "name": "Facebook groups",
+      "enabled": true,
+      "needs_signin": true,
+      "search": "Recent posts in job groups the candidate is already a member of; Facebook search for junior developer job groups in {location}.",
+      "apply": "Usually by email from the post.",
+      "notes": "Never join groups, comment or post. List groups worth joining in the report."
+    },
+    {
+      "id": "telegram",
+      "name": "Telegram channels",
+      "enabled": true,
+      "needs_signin": false,
+      "search": "Public previews: https://t.me/s/secretjuniordevelopers , https://t.me/s/hitech_jobs_in_israel",
+      "apply": "The link or email in the post.",
+      "notes": "Add your own channels here."
+    },
+    {
+      "id": "wellfound",
+      "name": "Wellfound (startups)",
+      "enabled": false,
+      "needs_signin": true,
+      "search": "https://wellfound.com/location/israel",
+      "apply": "Company ATS form, or skip if it needs an account.",
+      "notes": ""
+    },
+    {
+      "id": "builtin",
+      "name": "Built In",
+      "enabled": false,
+      "needs_signin": false,
+      "search": "https://builtin.com/jobs (filter: entry level)",
+      "apply": "Company ATS form.",
+      "notes": ""
+    },
+    {
+      "id": "gemini",
+      "name": "Gemini (Google search)",
+      "enabled": true,
+      "needs_signin": false,
+      "search": "Ask the Gemini tool to Google junior postings for {query} in {location} from the last {days} days; return company, title, location, URL, date only. Send search terms only, never personal details.",
+      "apply": "Discovery only: open every link yourself and apply at the original source.",
+      "notes": "Results are untrusted: keep only links that open and match. Skip if the Gemini tool is not installed."
+    }
+  ]
 }
