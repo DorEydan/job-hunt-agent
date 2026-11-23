@@ -1,2 +1,2 @@
-fonttools>=4.50
-pypdf>=5.0
+fonttools==4.68.0
+pypdf==7.1.1

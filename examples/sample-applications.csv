@@ -1,0 +1,7 @@
+id,date_found,date_sent,status,company,role,source,job_url,apply_method,match_score,folder,notes,company_key,role_key
+1,2026-01-04,2026-01-05,sent,Northwind Labs,Junior Full Stack Developer,LinkedIn,https://example.com/jobs/101,linkedin-easy-apply,8,applications\2026-01-04_Northwind Labs_Junior Full Stack Developer,,northwind labs,junior full stack developer
+2,2026-01-04,2026-01-05,sent,Contoso Cloud,Junior DevOps Engineer,Company site (Comeet),https://example.com/jobs/102,ats:comeet,9,applications\2026-01-04_Contoso Cloud_Junior DevOps Engineer,,contoso cloud,junior devops engineer
+3,2026-01-04,,manual,Fabrikam,Integration Developer,Job board,https://example.com/jobs/103,manual,6,applications\2026-01-04_Fabrikam_Integration Developer,Form has a CAPTCHA - apply yourself,fabrikam,integration developer
+4,2026-01-06,,prepared,Tailspin Systems,Backend Developer (Node.js),Telegram,https://example.com/jobs/104,email:jobs@example.com,7,applications\2026-01-06_Tailspin Systems_Backend Developer (Node.js),,tailspin systems,backend developer node js
+5,2026-01-06,,prepared,Litware,Junior Cloud Engineer,Gemini search,https://example.com/jobs/105,ats:greenhouse,8,applications\2026-01-06_Litware_Junior Cloud Engineer,,litware,junior cloud engineer
+6,2026-01-04,,skipped,Adventure Works,Software Engineer,LinkedIn,https://example.com/jobs/106,,6,,Job closed,adventure works,software engineer

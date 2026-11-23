@@ -11,3 +11,8 @@ drafts/
 .venv/
 __pycache__/
 *.pyc
+.preview/
+config.tmp
+
+# the sample resume is fictional and meant to be shared
+!examples/sample-resume.docx

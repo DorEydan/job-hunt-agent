@@ -28,8 +28,10 @@ import zipfile
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-ROOT = Path(__file__).resolve().parent.parent
-CONFIG = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from common import ROOT, load_config, resume_variants  # noqa: E402
+
+CONFIG = load_config()
 
 P_RE = re.compile(r"<w:p[ >].*?</w:p>", re.S)
 R_RE = re.compile(r"<w:r[ >].*?</w:r>", re.S)
@@ -67,8 +69,29 @@ def find_skill_lines(doc_xml):
     sys.exit(f"Heading '{CONFIG['skills_heading']}' not found in the base resume.")
 
 
+def split_label_run(p_xml):
+    """If the label and the values share one run ("Languages: A, B"), split it in two at the ':'."""
+    acc = ""
+    for r in R_RE.finditer(p_xml):
+        t = text_of(r.group(0))
+        if ":" in acc + t:
+            cut = t.index(":") + 1 if ":" in t else 0
+            while cut < len(t) and t[cut] == " ":
+                cut += 1
+            if cut == 0 or cut >= len(t) or "<w:t" not in r.group(0):
+                return p_xml
+            rpr_m = RPR_RE.search(r.group(0))
+            rpr = rpr_m.group(0) if rpr_m else ""
+            two = (f'<w:r>{rpr}<w:t xml:space="preserve">{escape(t[:cut])}</w:t></w:r>'
+                   f'<w:r>{rpr}<w:t xml:space="preserve">{escape(t[cut:])}</w:t></w:r>')
+            return p_xml[:r.start()] + two + p_xml[r.end():]
+        acc += t
+    return p_xml
+
+
 def rebuild_paragraph(p_xml, items):
     """Keep the bold label runs, replace the value runs with one run."""
+    p_xml = split_label_run(p_xml)
     runs = list(R_RE.finditer(p_xml))
     acc, label_end = "", None
     for idx, r in enumerate(runs):
@@ -115,13 +138,19 @@ def main():
     ap.add_argument("--first", action="append", default=[], metavar="LABEL=a,b,c")
     ap.add_argument("--line-order", help="comma-separated labels")
     ap.add_argument("--no-pdf", action="store_true")
-    variants = CONFIG.get("base_resumes", {})
-    ap.add_argument("--variant", choices=sorted(variants) or None, required=bool(variants),
-                    help="which base resume to start from (config.json -> base_resumes)")
+    variants = resume_variants(CONFIG)
+    if not variants:
+        sys.exit("No base resume set. Add one in the setup page (config.json -> base_resumes).")
+    ap.add_argument("--variant", choices=sorted(variants), default=None,
+                    help="which base resume to use (config.json -> base_resumes); optional if there is only one")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
 
-    base = Path(variants[args.variant]) if variants else Path(CONFIG["base_resume"])
+    if args.variant is None:
+        if len(variants) > 1:
+            ap.error(f"--variant is required, one of: {', '.join(sorted(variants))}")
+        args.variant = next(iter(variants))
+    base = Path(variants[args.variant])
     if not base.exists():
         sys.exit(f"Base resume not found: {base}")
     with zipfile.ZipFile(base) as z:

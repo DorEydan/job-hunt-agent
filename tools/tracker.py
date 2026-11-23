@@ -23,8 +23,10 @@ import sys
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
-ROOT = Path(__file__).resolve().parent.parent
-CONFIG = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from common import ROOT, load_config  # noqa: E402
+
+CONFIG = load_config()
 CSV_PATH = ROOT / "applications.csv"
 FIELDS = ["id", "date_found", "date_sent", "status", "company", "role", "source", "job_url",
           "apply_method", "match_score", "folder", "notes", "company_key", "role_key"]

@@ -7,11 +7,11 @@
     "linkedin": "https://www.linkedin.com/in/your-profile/",
     "github": "https://github.com/your-user"
   },
+  "report_language": "English",
   "base_resumes": {
-    "devops": "C:\\path\\to\\Your resume - DevOps.docx",
-    "fullstack": "C:\\path\\to\\Your resume - Full-Stack.docx"
+    "default": "examples/sample-resume.docx"
   },
-  "_base_resumes_note": "DevOps / Cloud / SRE / IT-DevOps / automation jobs -> devops. Full-Stack / Backend / Frontend / software engineer jobs -> fullstack.",
+  "_base_resumes_note": "One version is enough. To keep several (e.g. devops and fullstack), add them and say here which jobs each one is for.",
   "resume_output_name": "Your Name resume",
   "skills_heading": "Technical Skills",
   "send_format": "pdf",
@@ -40,7 +40,7 @@
     "junior cloud engineer",
     "student developer"
   ],
-  "search_terms_he": [
+  "search_terms_local": [
     "ג'וניור פולסטאק",
     "מפתח/ת Full Stack ג'וניור",
     "DevOps ג'וניור",
@@ -94,6 +94,6 @@
   },
   "cover_note": {
     "he": "שלום,\nמצורפים קורות החיים שלי למשרת {role}.\nאני מפתח Full-Stack עם ניסיון ב-{top_skills}, ואשמח להתאים את עצמי לצוות שלכם.\nתודה,\n{full_name} | {phone}",
-    "en": "Hi,\nPlease find my resume attached for the {role} position.\nI'm a full-stack developer with hands-on experience in {top_skills}, and I'd be glad to talk.\nThanks,\n{full_name} | {phone}"
+    "en": "Hi,\nPlease find my resume attached for the {role} position.\nI'm a developer with hands-on experience in {top_skills}, and I'd be glad to talk.\nThanks,\n{full_name} | {phone}"
   }
 }
