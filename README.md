@@ -30,7 +30,7 @@ everything up from your resume.
    | Applying | Allowed ways to apply and the common form answers (notice period, salary, work permit) |
    | Schedule | Every day, workdays, 3×/2×/once a week, and the time; the look-back window follows automatically |
 
-   No resume yet? Continue with the fictional [sample resume](examples/sample-resume.docx) and swap it later.
+   No resume yet, or want a new design? The wizard links to the **resume builder**.
 4. **Schedule it:** the *Schedule* tab gives you the exact prompt to paste into Claude Code.
 
 | You need | For |
@@ -39,6 +39,53 @@ everything up from your resume.
 | Microsoft Word (Windows) **or** LibreOffice (included in the Docker image) | Exporting the tailored resume to PDF |
 | [Claude Code](https://claude.com/claude-code) (desktop app or CLI) | The agent itself |
 | Claude in Chrome extension | Sites that need your sign-in: LinkedIn, job boards, Gmail |
+
+## Resume builder
+
+Make a clean, one-page resume that screening systems (ATS) can read, **from scratch** (your setup details are filled
+in) or by **redesigning your current one** (it's read into the form). Pick one of 8 templates; the one that fits your
+field and level is marked *recommended*:
+
+| Template | For |
+|----------|-----|
+| Tech | Developers, DevOps, data, QA, IT: skills near the top |
+| Graduate / junior | Students and first jobs: education and projects first |
+| Professional | Experienced candidates, product, sales: experience first, classic look |
+| Creative | Design, marketing, content: portfolio and projects up front |
+| Modern | Startups: a colored accent bar, still plain text |
+| Minimal | Conservative fields: black and white |
+| Compact | A lot to fit on one page |
+| Career change | Transferable skills and projects before past jobs |
+
+All are single column, A4 or Letter (by country), with the skills written in the format the agent tailors per job.
+A live preview updates as you type; *Create Word + PDF* makes the files; *Use it for job applications* switches the
+agent to it. *Check my resume* flags weak openings, missing numbers, long bullets and common keywords for your field
+(add them only if true), and *Copy prompt* gives you a prompt for Claude to polish the wording without inventing facts.
+The advice is summarized, with sources, in [docs/RESUME_GUIDE.md](docs/RESUME_GUIDE.md).
+
+## Interview prep and learning
+
+The **Prepare** tab:
+
+- **Interview prep** for an application: mark it *interview* in Applications, or ask in Claude Code. The agent reads
+  the posting and your resume, researches interview guides for your field and the company, and writes
+  `prep/<company>-<role>.md`: likely technical and behavioral questions, STAR stories built only from your own
+  facts (`[fill in]` where a detail is missing), do's and don'ts, questions to ask them, gaps to brush up, sources.
+  General tips: [docs/INTERVIEW_GUIDE.md](docs/INTERVIEW_GUIDE.md).
+- **Learn a skill**, e.g. Docker: the agent finds courses on the platforms you pick (YouTube, official docs,
+  freeCodeCamp, Udemy, Coursera, edX, Pluralsight, LinkedIn Learning), checks every link, says what's free, and saves
+  `learning/<skill>.md`. It never buys or signs up. Optionally, run reports suggest courses when 3+ jobs ask for a
+  skill you don't have.
+
+## Applications: re-applying and ghost jobs
+
+- **Re-apply window:** how long before the same job can be offered again (default 60 days).
+- **Ghost jobs** (a real company posting with no real hiring behind it): when the same job keeps coming back, the
+  agent lists it under *Possibly a ghost job* with the signs it saw and asks *"Mark any of these as fake?"*. Marked
+  jobs (status `ghost`) are never offered again; you can choose to skip that job only or the whole company.
+- **Statuses:** prepared, sent, interview, offer, rejected, manual, failed, skipped, ghost.
+- **Tailoring per job** can be switched off (send your resume as is), and you choose where each job's files go:
+  by company › role (recommended), field › company › role, role › company, or one dated folder per job.
 
 ## Docker
 
@@ -116,15 +163,17 @@ Dockerfile, docker-compose.yml   control panel + tools in a container (LibreOffi
 tools/
   tailor_resume.py       reorder skills in a .docx, export + shrink the PDF
   resume_profile.py      reads an uploaded resume to pre-fill the setup wizard
+  resume_builder.py      builds a resume in 8 templates, or reads one to redesign it
   pdf_export.py          Word (Windows) or LibreOffice (Docker, Linux, macOS)
   tracker.py             application log with the "no re-send within 60 days" rule
   shrink_pdf.py          font subsetting for small PDFs
   docx_to_pdf.ps1        Word export to PDF
 examples/                fictional sample resume, run report and application log
+docs/                    resume and interview guides (with sources), screenshots
 tests/                   unit tests (run in GitHub Actions on Windows and Linux)
 
 git-ignored, stays on your computer:
-  config.json  applications.csv  applications/  runs/  uploads/  your resumes
+  config.json  applications.csv  applications/  runs/  uploads/  prep/  learning/  your resumes
 ```
 
 ## Customize
@@ -138,8 +187,10 @@ get their defaults automatically, so an older `config.json` keeps working.
 | **Profile** | Contact details used in forms and emails (incl. portfolio site); the language of run reports |
 | **Job search** | Target roles; search terms in English and your local language; max years of experience; words that disqualify a title; job types (full-time, part-time, student, internship, contract, freelance); keywords a job must mention or must not mention; companies to never apply to; search location, cities, maximum travel distance, remote/hybrid; how many days back to look; max jobs per run; minimum match score; re-apply and re-offer windows |
 | **Sites** | Switch each site on or off, reorder them (the agent searches in this order), edit how each one is searched and applied to, or add new ones: 17 ready-made sites (LinkedIn, Indeed, Glassdoor, Wellfound, Built In, Welcome to the Jungle, Remote OK, We Work Remotely, Hacker News "Who is hiring", company ATS pages, Gemini search, Telegram, Facebook groups, and Israeli boards) local boards for 12 countries, or any custom site. Search links take `{query}`, `{location}`, `{days}` and `{seconds}` |
-| **Resumes** | One or more resume versions (e.g. `devops`, `fullstack`) and which jobs each is for; the skills heading; the name of the sent PDF; a test export |
-| **Applying** | Which ways of applying are allowed (quick apply, job-board send-CV, company forms, email, social messages); whether to paste the cover note into optional fields; notifications; screening answers; cover notes per language |
+| **Resumes** | One or more resume versions (e.g. `devops`, `fullstack`) and which jobs each is for; tailoring on/off and the folder layout; the skills heading; the name of the sent PDF; a test export |
+| **Resume builder** | Build or redesign a resume in 8 templates (see above) |
+| **Applying** | Re-apply window and ghost-job handling; which ways of applying are allowed (quick apply, job-board send-CV, company forms, email, social messages); whether to paste the cover note into optional fields; notifications; screening answers; cover notes per language |
+| **Prepare** | Interview prep per application; course search per skill; learning platforms and free-only |
 | **Schedule** | Days and time (presets: 3× a week, 2× a week, workdays, daily). It generates the exact text to paste into Claude Code to create or update the scheduled task, and warns if the look-back window is shorter than the gap between runs |
 
 Fixed on purpose: nothing is sent without your approval, and the agent never solves CAPTCHAs, creates accounts or

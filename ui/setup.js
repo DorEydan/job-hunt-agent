@@ -184,7 +184,7 @@ steps.resume = () => {
     ${r && r.skills_error ? `<div class="msg bad">${esc(r.skills_error)}</div><button class="btn" data-wiz="reread">Read again with this heading</button>` : ""}
     ${skills}
     ${wiz.filled && wiz.filled.length ? `<div class="msg ok">Filled in from your resume: ${esc(wiz.filled.join(", "))}. You'll check each one in the next steps.</div>` : ""}
-    ${!r ? `<p class="sub">No file yet? <a href="#" data-wiz="sample">Continue with the sample resume</a> and change it later in the Resumes tab.</p>` : ""}
+    <p class="sub">${r ? "Want a fresh design?" : "No resume yet, or want a new design?"} <a href="#" data-wiz="builder">Build one with the resume builder</a>${r ? "" : ` · or <a href="#" data-wiz="sample">continue with the sample resume</a> for now`}.</p>
   </div>
   <div class="card"><h3>Cover letter <span class="sub">(optional)</span></h3>
     <p class="sub" style="margin-top:-6px">Attached when a form has a cover-letter field. <code>.docx</code>, <code>.pdf</code> or <code>.txt</code>.</p>
@@ -194,7 +194,7 @@ steps.resume = () => {
   </div>${navButtons()}`;
 };
 
-steps.applying = () => `<div class="card"><h3>How may the agent apply?</h3>${APPLY_METHODS.map(([k, l]) => field("apply_methods." + k, l, { type: "bool" })).join("")}
+steps.applying = () => `${tailoringCard()}${reapplyCard()}<div class="card"><h3>How may the agent apply?</h3>${APPLY_METHODS.map(([k, l]) => field("apply_methods." + k, l, { type: "bool" })).join("")}
     <div class="hint">Jobs that need a method you switched off are listed for you to apply yourself.</div></div>
   <div class="card"><h3>Common form questions</h3><p class="sub" style="margin-top:-6px">The agent answers only from here. Leave blank to be asked.</p><div class="grid">
     ${field("screening_answers.notice_period", "Notice period / start date", { ph: "e.g. 30 days, immediately" })}
@@ -364,6 +364,7 @@ document.addEventListener("click", async e => {
   try {
     if (a === "back") { wiz.step--; wiz.msg = ""; return render(); }
     if (a === "skip") { set("setup_complete", true); state.wizard = false; document.body.classList.remove("wizard"); await api("/api/config", { config: state.cfg }).then(r => { if (!r.problems) { state.saved = JSON.stringify(state.cfg); state.exists = true; } }); return go("home"); }
+    if (a === "builder") { return openBuilderFromSetup(); }
     if (a === "sample") { set("base_resumes", { default: "examples/sample-resume.docx" }); wiz.sample = true; wiz.step++; wiz.msg = ""; return render(); }
     if (a === "nocover") { set("cover_letter_file", ""); wiz.cover = null; return render(); }
     if (a === "reread" && wiz.resume) { const r = await api("/api/resume/inspect", { path: wiz.resume.path, heading: get("skills_heading") || "" }); wiz.resume = { ...wiz.resume, ...r }; return render(); }

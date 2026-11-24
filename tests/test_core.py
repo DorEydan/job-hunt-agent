@@ -272,6 +272,104 @@ class Uploads(unittest.TestCase):
                 server.reread_skills({"path": path, "heading": "Technical Skills"})
 
 
+class ResumeBuilder(unittest.TestCase):
+    def setUp(self):
+        import resume_builder
+        self.rb = resume_builder
+        self.data = {"name": "Sam Lee", "headline": "Junior Data Analyst",
+                     "contact": {"email": "sam@example.com", "city": "Leeds, UK", "linkedin": "linkedin.com/in/sam"},
+                     "summary": "Analyst.", "skills_heading": "Skills",
+                     "skills": [{"label": "Data", "items": ["SQL", "Python"]}, {"label": "Tools", "items": ["Power BI"]}],
+                     "experience": [{"title": "Data Intern", "company": "Acme <&> Co", "dates": "2025 – Present",
+                                     "bullets": ["Responsible for reports", "Built a dashboard for 30 managers"]}],
+                     "education": [{"degree": "BSc Maths", "school": "Leeds", "dates": "2021 – 2024", "bullets": []}],
+                     "projects": [], "certifications": ["SQL course"], "languages": "English: Native"}
+
+    def test_every_template_builds_a_docx_the_agent_can_tailor(self):
+        import tempfile as tf
+        for t in self.rb.TEMPLATES:
+            docx = self.rb.build(self.data, t)
+            server.check_docx(docx)  # passes our own upload checks (only http/mailto links)
+            with tf.TemporaryDirectory() as d:
+                f = Path(d) / "r.docx"
+                f.write_bytes(docx)
+                p = tailor(f"--docx={f}", "--heading=Skills", "--list")
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertEqual(json.loads(p.stdout)["Data"], ["SQL", "Python"])
+
+    def test_round_trip_and_escaping(self):
+        back = self.rb.parse(self.rb.build(self.data, "tech"))
+        self.assertEqual(back["name"], "Sam Lee")
+        self.assertEqual(back["experience"][0]["company"], "Acme <&> Co")
+        self.assertEqual(back["experience"][0]["dates"], "2025 – Present")
+        self.assertEqual(len(back["experience"][0]["bullets"]), 2)
+        self.assertEqual(back["skills"][0], {"label": "Data", "items": ["SQL", "Python"]})
+
+    def test_bad_data_rejected(self):
+        for bad in ({"skills": [{"label": "A:B", "items": ["x"]}]}, {"skills": [{"label": "A", "items": ["x,y"]}]},
+                    {"experience": [{"title": "x" * 500}]}, {"page": "A3"}, {"certifications": "not a list"}, []):
+            self.assertTrue(self.rb.validate(bad), bad)
+            with self.assertRaises(ValueError):
+                self.rb.build(bad)
+
+    def test_tips_and_recommendation(self):
+        tips = " ".join(self.rb.tips(self.data, ["SQL", "Tableau"]))
+        self.assertIn("weak phrase", tips)
+        self.assertIn("Tableau", tips)
+        self.assertNotIn("SQL,", tips)
+        self.assertEqual(self.rb.recommend("software", "entry"), "graduate")
+        self.assertEqual(self.rb.recommend("design", "junior"), "creative")
+        self.assertEqual(self.rb.recommend("devops", "junior"), "tech")
+        self.assertIn("do not invent", self.rb.claude_prompt(self.data, "Data Analyst"))
+
+    def test_redesign_reads_only_configured_or_uploaded_files(self):
+        for body in ({"path": "../config.example.json"}, {"path": "examples/sample-resume.docx"},
+                     {"variant": "../x"}, {"variant": "nope"}):
+            with self.assertRaises(ValueError):
+                server.builder_source(body)
+        data = self.rb.parse(server.builder_source({"variant": "default"}))
+        self.assertTrue(data["skills"])
+
+
+class GhostJobsAndFolders(unittest.TestCase):
+    def test_ghost_blocks_forever_and_reposts_are_reported(self):
+        import datetime as dt
+        old = (dt.date.today() - dt.timedelta(days=400)).isoformat()
+        row = {"id": "1", "status": "sent", "date_sent": old, "date_found": old, "job_url": "", "company": "Acme",
+               "role": "Junior DevOps Engineer", "company_key": tracker.company_key("Acme"),
+               "role_key": tracker.role_key("Junior DevOps Engineer")}
+        self.assertFalse(tracker.blocking_rows([row], "Acme", "Junior DevOps Engineer", ""))  # old: allowed again
+        self.assertEqual(len(tracker.earlier_sightings([row], "Acme", "DevOps Engineer - Junior", "")), 1)
+        ghost = {**row, "status": "ghost"}
+        self.assertTrue(tracker.ghost_rows([ghost], "Acme", "Junior DevOps Engineer", ""))
+        self.assertFalse(tracker.ghost_rows([ghost], "Acme", "Senior Data Scientist", ""))  # block = role
+        tracker.GHOST["block"] = "company"
+        try:
+            self.assertTrue(tracker.ghost_rows([ghost], "Acme", "Senior Data Scientist", ""))
+        finally:
+            tracker.GHOST["block"] = "role"
+
+    def test_folder_layouts(self):
+        rt = tracker.CONFIG.setdefault("resume_tailoring", {})
+        before = dict(rt)
+        try:
+            for layout, want in (("company_role", "applications/Acme/Dev - Ops/2026-01-02"),
+                                 ("date_company_role", "applications/2026-01-02_Acme_Dev - Ops"),
+                                 ("role_company", "applications/Dev - Ops/Acme/2026-01-02")):
+                rt["folder_layout"] = layout
+                self.assertEqual(tracker.job_folder("Acme", "Dev / Ops", date="2026-01-02"), want)
+        finally:
+            rt.clear()
+            rt.update(before)
+
+    def test_settings_validated(self):
+        c = json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))
+        self.assertEqual(server.validate_config(c), [])
+        c["resume_tailoring"] = {"enabled": "yes", "folder_layout": "../x"}
+        c["ghost_jobs"] = {"repost_times": 1, "block": "everything"}
+        self.assertEqual(len(server.validate_extras(c)), 2)
+
+
 class SetupSettings(unittest.TestCase):
     def cfg(self):
         return json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))
@@ -343,6 +441,27 @@ class ServerGuards(unittest.TestCase):
 
     def test_post_needs_json(self):
         self.assertEqual(self.req("POST", "/api/config", {"Content-Type": "text/plain"}, "{}"), 403)
+
+    def test_notes_listing_and_traversal(self):
+        d = ROOT / "prep"
+        made = not d.exists()
+        d.mkdir(exist_ok=True)
+        (d / "Acme - Junior DevOps.md").write_text("# Prep", encoding="utf-8")
+        try:
+            self.assertEqual(self.req("GET", "/api/notes/prep"), 200)
+            self.assertEqual(self.req("GET", "/api/notes/prep/Acme%20-%20Junior%20DevOps.md"), 200)
+            for bad in ("..%2Fconfig.json", "..%2F..%2FREADME.md", "%2E%2E%2FAGENT.md", "x.txt", "..%5Cconfig.json"):
+                self.assertEqual(self.req("GET", "/api/notes/prep/" + bad), 404, bad)
+            self.assertEqual(self.req("GET", "/api/notes/secret"), 404)
+        finally:
+            (d / "Acme - Junior DevOps.md").unlink()
+            if made:
+                d.rmdir()
+
+    def test_learning_settings_validated(self):
+        c = json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))
+        c["learning"] = {"platforms": ["youtube", "evil-site"], "free_only": "yes"}
+        self.assertEqual(len(server.validate_extras(c)), 1)
 
     def test_run_report_traversal(self):
         self.assertEqual(self.req("GET", "/api/runs/..%2Fconfig.json"), 404)

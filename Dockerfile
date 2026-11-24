@@ -5,6 +5,7 @@ FROM python:3.12-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libreoffice-writer-nogui \
        fonts-liberation fonts-dejavu-core fonts-noto-core fonts-noto-color-emoji \
+       fonts-crosextra-carlito fonts-crosextra-caladea \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

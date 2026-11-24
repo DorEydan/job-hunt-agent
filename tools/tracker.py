@@ -2,16 +2,20 @@
 """Application log (applications.csv) with the "no re-send within 60 days" rule.
 
   python tools/tracker.py check  --company "Acme" --role "Junior DevOps" [--url URL]
-      exit 0 + "OK"            -> allowed
+      exit 0 + "OK"            -> allowed (a second line "REPOST ..." means it was seen before: maybe a ghost job)
       exit 3 + "DUPLICATE ..." -> already sent/skipped/pending, do not prepare it
+      exit 3 + "GHOST ..."     -> the candidate marked this job (or company) as fake: never prepare it
   python tools/tracker.py add    --company ... --role ... --url ... --source linkedin
                                  --method "linkedin-easy-apply" --score 8 --folder applications/...
       prints the new id (status = prepared)
-  python tools/tracker.py update --id 12 --status sent|skipped|manual|failed [--notes "..."]
+  python tools/tracker.py update --id 12 --status sent|skipped|manual|failed|ghost|interview|rejected|offer [--notes "..."]
+  python tools/tracker.py folder --company "Acme" --role "Junior DevOps" [--field devops]
+      prints the folder for this job's files, following config.json -> resume_tailoring.folder_layout
   python tools/tracker.py list   [--status prepared] [--days 60]
 
 Windows (from config.json): sent/skipped block for dedup_days (60);
-prepared/manual block for pending_days (14), after which an unanswered job may be offered again.
+prepared/manual block for pending_days (14), after which an unanswered job may be offered again;
+ghost (a job the candidate marked as fake, posted only for show) blocks forever.
 """
 import argparse
 import csv
@@ -30,7 +34,9 @@ CONFIG = load_config()
 CSV_PATH = ROOT / "applications.csv"
 FIELDS = ["id", "date_found", "date_sent", "status", "company", "role", "source", "job_url",
           "apply_method", "match_score", "folder", "notes", "company_key", "role_key"]
-STATUSES = {"prepared", "sent", "skipped", "manual", "failed"}
+STATUSES = {"prepared", "sent", "skipped", "manual", "failed", "ghost", "interview", "rejected", "offer"}
+GHOST = {"ask_when_reposted": True, "repost_times": 2, "block": "role", **(CONFIG.get("ghost_jobs") or {})}
+LAYOUTS = {"date_company_role", "company_role", "field_company_role", "role_company"}
 
 COMPANY_NOISE = re.compile(r"\b(ltd|inc|llc|corp|co|group|israel|technologies|בע\"?מ|בעמ)\b", re.I)
 
@@ -96,12 +102,30 @@ def parse_date(s):
         return None
 
 
+def matches(r, ck, rk, uk):
+    return (uk and uk == url_key(r["job_url"])) or (ck and ck == r["company_key"] and same_role(rk, r["role_key"]))
+
+
+def ghost_rows(rows, company, role, url):
+    ck, rk, uk = company_key(company), role_key(role), url_key(url)
+    return [r for r in rows if r["status"] == "ghost" and (
+        matches(r, ck, rk, uk) or (GHOST.get("block") == "company" and ck and ck == r["company_key"]))]
+
+
+def earlier_sightings(rows, company, role, url):
+    """Earlier rows of the same job outside the blocking windows: the posting keeps coming back."""
+    ck, rk, uk = company_key(company), role_key(role), url_key(url)
+    return [r for r in rows if r["status"] != "ghost" and matches(r, ck, rk, uk)]
+
+
 def blocking_rows(rows, company, role, url):
     today = dt.date.today()
     ck, rk, uk = company_key(company), role_key(role), url_key(url)
     hits = []
     for r in rows:
-        if r["status"] in ("sent", "skipped"):
+        if r["status"] == "ghost":
+            continue  # handled by ghost_rows
+        if r["status"] in ("sent", "skipped", "interview", "rejected", "offer"):
             ref, window = parse_date(r["date_sent"]) or parse_date(r["date_found"]), CONFIG["dedup_days"]
         elif r["status"] in ("prepared", "manual"):
             ref, window = parse_date(r["date_found"]), CONFIG["pending_days"]
@@ -114,6 +138,30 @@ def blocking_rows(rows, company, role, url):
         ):
             hits.append(r)
     return hits
+
+
+WIN_RESERVED = re.compile(r"(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])", re.I)
+
+
+def safe_part(s, n=60):
+    """One folder name from untrusted text (company or role from a posting): no separators, no '..', no device names."""
+    s = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "-", s).strip(" .")
+    s = s[:n].rstrip(" .") or "unknown"
+    if WIN_RESERVED.fullmatch(s.split(".", 1)[0].strip()):
+        s = "_" + s
+    return s
+
+
+def job_folder(company, role, field="", date=""):
+    """applications/<...> for one job's files, in the layout the candidate chose."""
+    if date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+        raise ValueError("date must look like 2026-01-31")
+    day = dt.date.fromisoformat(date).isoformat() if date else dt.date.today().isoformat()
+    layout = (CONFIG.get("resume_tailoring") or {}).get("folder_layout", "date_company_role")
+    c, r = safe_part(company), safe_part(role)
+    parts = {"company_role": [c, r, day], "field_company_role": [safe_part(field or CONFIG.get("field") or "general"), c, r, day],
+             "role_company": [r, c, day]}.get(layout, [f"{day}_{c}_{r}"])
+    return "applications/" + "/".join(parts)
 
 
 def main():
@@ -139,6 +187,12 @@ def main():
     u.add_argument("--notes", default=None)
     u.add_argument("--method", default=None)
 
+    fo = sub.add_parser("folder")
+    fo.add_argument("--company", required=True)
+    fo.add_argument("--role", required=True)
+    fo.add_argument("--field", default="")
+    fo.add_argument("--date", default="")
+
     l = sub.add_parser("list")
     l.add_argument("--status")
     l.add_argument("--days", type=int)
@@ -147,6 +201,11 @@ def main():
     rows = load()
 
     if args.cmd == "check":
+        ghosts = ghost_rows(rows, args.company, args.role, args.url)
+        if ghosts:
+            g = ghosts[0]
+            print(f"GHOST id={g['id']} company={g['company']} role={g['role']} - marked as a fake job, skip it")
+            sys.exit(3)
         hits = blocking_rows(rows, args.company, args.role, args.url)
         if hits:
             h = hits[0]
@@ -154,6 +213,14 @@ def main():
                   f"role={h['role']} found={h['date_found']} sent={h['date_sent']}")
             sys.exit(3)
         print("OK")
+        seen = earlier_sightings(rows, args.company, args.role, args.url)
+        if seen and len(seen) + 1 >= int(GHOST.get("repost_times", 2)):
+            last = max((r["date_found"] for r in seen), default="")
+            print(f"REPOST times={len(seen) + 1} last={last} ids={','.join(r['id'] for r in seen)}"
+                  + (" - ask the candidate whether this is a ghost job" if GHOST.get("ask_when_reposted") else ""))
+
+    elif args.cmd == "folder":
+        print(job_folder(args.company, args.role, args.field, args.date))
 
     elif args.cmd == "add":
         hits = blocking_rows(rows, args.company, args.role, args.url)

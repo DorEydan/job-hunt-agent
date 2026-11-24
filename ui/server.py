@@ -9,7 +9,6 @@ application log, run reports and automation setup. Standard library only.
 """
 import argparse
 import base64
-import html as htmllib
 import io
 import csv
 import json
@@ -21,15 +20,17 @@ import sys
 import threading
 import webbrowser
 import zipfile
+import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 from common import CONFIG_PATH, EXAMPLE_PATH, resume_variants  # noqa: E402
 import pdf_export  # noqa: E402
 import resume_profile  # noqa: E402
+import resume_builder  # noqa: E402
 
 UI_DIR = ROOT / "ui"
 RUNS_DIR = ROOT / "runs"
@@ -45,7 +46,11 @@ _upload_slots = threading.BoundedSemaphore(2)  # caps memory: each upload holds 
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 IN_DOCKER = os.environ.get("JOBHUNT_IN_DOCKER") == "1" or Path("/.dockerenv").exists()
 UPLOAD_KINDS = {"resume": {".docx"}, "cover_letter": {".docx", ".pdf", ".txt", ".md"}}
-STATUSES = ["prepared", "sent", "manual", "failed", "skipped"]
+STATUSES = ["prepared", "sent", "interview", "offer", "rejected", "manual", "failed", "skipped", "ghost"]
+NOTE_DIRS = {"prep": ROOT / "prep", "learning": ROOT / "learning"}
+NOTE_NAME = re.compile(r"[A-Za-z0-9][\w .()&+-]{0,100}\.md")  # always used with fullmatch
+PLATFORMS = ["youtube", "official-docs", "freecodecamp", "udemy", "coursera", "edx", "pluralsight", "linkedin-learning"]
+LAYOUTS = ["company_role", "date_company_role", "field_company_role", "role_company"]
 RUN_NAME = re.compile(r"\d{4}-\d{2}-\d{2}[A-Za-z0-9_-]*\.md")  # always used with fullmatch
 VARIANT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,39}")  # always used with fullmatch
 
@@ -169,6 +174,22 @@ def validate_extras(cfg):
     if not isinstance(km, int) or isinstance(km, bool) or not 0 <= km <= 5000:
         errs.append("locations.max_commute_km: a whole number from 0 (no limit) to 5000.")
     errs += check_file_path("cover_letter_file", cfg.get("cover_letter_file", ""), UPLOAD_KINDS["cover_letter"])
+    rt = cfg.get("resume_tailoring", {"enabled": True, "folder_layout": "company_role"})
+    if not isinstance(rt, dict) or not isinstance(rt.get("enabled", True), bool) or \
+            rt.get("folder_layout", "company_role") not in LAYOUTS:
+        errs.append("resume_tailoring: on/off, and a folder layout from the list.")
+    lr = cfg.get("learning", {})
+    if not isinstance(lr, dict) or not isinstance(lr.get("suggest_in_runs", True), bool) or \
+            not isinstance(lr.get("free_only", False), bool) or not isinstance(lr.get("language", ""), str) or \
+            len(lr.get("language", "")) > 100 or not isinstance(lr.get("platforms", []), list) or \
+            len(lr.get("platforms", [])) > len(PLATFORMS) or any(x not in PLATFORMS for x in lr.get("platforms", [])):
+        errs.append("learning: on/off options, a language, and platforms from the list.")
+    gj = cfg.get("ghost_jobs", {})
+    rt_n = gj.get("repost_times", 2) if isinstance(gj, dict) else None
+    if not isinstance(gj, dict) or not isinstance(gj.get("ask_when_reposted", True), bool) or \
+            not isinstance(rt_n, int) or isinstance(rt_n, bool) or not 2 <= rt_n <= 20 or \
+            gj.get("block", "role") not in ("role", "company"):
+        errs.append("ghost_jobs: ask on/off, repost count 2-20, block 'role' or 'company'.")
     for k in ("cover_note_in_forms", "notifications"):
         if not isinstance(cfg.get(k, True), bool):
             errs.append(f"{k}: must be on or off.")
@@ -330,10 +351,8 @@ def schedule_prompt():
 
 def docx_text(data: bytes, limit=20000):
     with zipfile.ZipFile(io.BytesIO(data)) as z:
-        xml = z.read("word/document.xml").decode("utf-8", "replace")
-    paras = re.findall(r"<w:p[ >].*?</w:p>", xml, re.S)
-    out = "\n".join(htmllib.unescape("".join(re.findall(r"<w:t(?:\s[^>]*)?>([^<]*)</w:t>", p))) for p in paras)
-    return out.strip()[:limit]
+        xml = resume_profile.read_part(z, "word/document.xml")
+    return "\n".join(resume_profile.paragraphs(xml)).strip()[:limit]
 
 
 def check_docx(data: bytes):
@@ -353,16 +372,27 @@ def check_docx(data: bytes):
                 raise ValueError(too_big)
             if b"<!DOCTYPE" in xml or b"<!ENTITY" in xml:
                 raise ValueError("This .docx has unusual content. Re-save it in Word and try again.")
-            for name in z.namelist():
-                if name.endswith(".rels"):
-                    with z.open(name) as f:
-                        rels = f.read(1_000_001).decode("utf-8", "replace")
-                    for target in re.findall(r'Target="([^"]*)"[^>]*TargetMode="External"', rels) + \
-                            re.findall(r'TargetMode="External"[^>]*Target="([^"]*)"', rels):
-                        t = target.strip().lower().replace("\\", "/")
-                        if not t.startswith(("http://", "https://", "mailto:")):
-                            raise ValueError("This .docx links to a local file or network share. "
-                                             "Remove that link (or re-save the file) and try again.")
+            rel_names = [n for n in z.namelist() if n.endswith(".rels")]
+            if len(rel_names) > 200:
+                raise ValueError(too_big)
+            for name in rel_names:
+                with z.open(name) as f:
+                    rels = f.read(1_000_001)
+                if len(rels) > 1_000_000:
+                    raise ValueError(too_big)
+                if b"<!DOCTYPE" in rels or b"<!ENTITY" in rels:
+                    raise ValueError("This .docx has unusual content. Re-save it in Word and try again.")
+                try:
+                    root = ET.fromstring(rels)
+                except ET.ParseError:
+                    raise ValueError("This .docx is damaged. Re-save it in Word and try again.")
+                for el in root:
+                    if el.get("TargetMode") != "External":
+                        continue
+                    t = el.get("Target", "").strip().lower().replace("\\", "/")
+                    if not t.startswith(("http://", "https://", "mailto:")):
+                        raise ValueError("This .docx links to a local file or network share. "
+                                         "Remove that link (or re-save the file) and try again.")
     except zipfile.BadZipFile:
         raise ValueError("This is not a Word document (.docx).")
 
@@ -443,15 +473,105 @@ def save_upload(body):
     return info
 
 
+def upload_path(path):
+    """A relative path that stays inside uploads/. Absolute and network paths are refused before touching them."""
+    if not isinstance(path, str) or not path or "\x00" in path or Path(path).is_absolute() or \
+            path.strip().replace("\\", "/").startswith(("/", "//")) or re.match(r"^[A-Za-z]:", path):
+        raise ValueError("Unknown file.")
+    target = (ROOT / path).resolve()
+    if not target.is_relative_to(UPLOAD_DIR.resolve()):
+        raise ValueError("Unknown file.")
+    return target
+
+
 def reread_skills(body):
     """Read an uploaded resume's skills again (after the user changes the heading)."""
     path, heading = body.get("path"), check_heading(body.get("heading"))
-    if not isinstance(path, str):
-        raise ValueError("Bad request.")
-    target = (ROOT / path).resolve()
+    target = upload_path(path)
     if not target.is_relative_to(UPLOAD_DIR.resolve()) or target.suffix.lower() != ".docx" or not target.is_file():
         raise ValueError("Unknown file.")
     return read_skills(target, heading)
+
+
+# ---------- resume builder ----------
+
+BUILT = UPLOAD_DIR / "built-resume.docx"
+BUILDER_PREVIEW = PREVIEW_DIR / "builder"
+COMMON_SKILLS = {
+    "software": ["Git", "REST API", "SQL", "JavaScript", "TypeScript", "React", "Node.js", "Docker", "Python"],
+    "devops": ["Linux", "Docker", "Kubernetes", "Terraform", "CI/CD", "AWS", "Python", "Bash", "Git", "Monitoring"],
+    "data": ["SQL", "Python", "Excel", "Power BI", "Tableau", "Pandas", "ETL"],
+    "qa": ["Test automation", "Selenium", "Cypress", "API testing", "SQL", "Jira", "Python"],
+    "it": ["Windows Server", "Active Directory", "Networking", "Linux", "PowerShell", "Microsoft 365"],
+    "security": ["SIEM", "Networking", "Linux", "Python", "Incident response"],
+    "design": ["Figma", "Prototyping", "User research", "Design systems"],
+    "product": ["Jira", "Roadmap", "Analytics", "A/B testing", "SQL"],
+    "marketing": ["SEO", "Google Analytics", "Content", "Social media", "HubSpot"],
+    "sales": ["CRM", "Salesforce", "HubSpot", "Negotiation"],
+}
+
+
+def builder_source(body):
+    """The .docx to redesign: a configured resume version, or a file uploaded in the wizard."""
+    cfg, _ = read_config()
+    if body.get("variant"):
+        v = body["variant"]
+        variants = resume_variants(cfg)
+        if not isinstance(v, str) or not VARIANT_NAME.fullmatch(v) or v not in variants:
+            raise ValueError("Unknown resume version.")
+        target = Path(variants[v])
+    else:
+        target = upload_path(body.get("path"))
+    if target.suffix.lower() != ".docx" or not target.is_file():
+        raise ValueError("Resume file not found. Check its path on the Resumes tab.")
+    if target.stat().st_size > MAX_FILE:
+        raise ValueError("The resume file is larger than 5 MB.")
+    data = target.read_bytes()
+    check_docx(data)
+    return data
+
+
+def builder_build(body):
+    data, template = body.get("data"), body.get("template")
+    if template not in resume_builder.TEMPLATES:
+        raise ValueError("Unknown template.")
+    errs = resume_builder.validate(data)
+    if errs:
+        raise ValueError("; ".join(errs))
+    heading = check_heading(data.get("skills_heading") or "Technical Skills")
+    docx = resume_builder.build(data, template)
+    with _tool_lock:
+        UPLOAD_DIR.mkdir(exist_ok=True)
+        BUILT.write_bytes(docx)
+        if BUILDER_PREVIEW.exists():
+            shutil.rmtree(BUILDER_PREVIEW)
+        BUILDER_PREVIEW.mkdir(parents=True)
+        pdf, pdf_error = BUILDER_PREVIEW / "resume.pdf", None
+        try:
+            pdf_export.export(BUILT, pdf)
+            try:
+                from shrink_pdf import shrink
+                shrink(pdf)
+            except ImportError:
+                pass
+        except Exception as e:
+            pdf_error = f"PDF preview not available: {e}"
+    out = {"path": BUILT.relative_to(ROOT).as_posix(), "heading": heading, "pdf_error": pdf_error}
+    out.update(read_skills(BUILT, heading))  # proves the agent can tailor it
+    return out
+
+
+def builder_tips(body):
+    data = body.get("data")
+    errs = resume_builder.validate(data)
+    if errs:
+        raise ValueError("; ".join(errs))
+    # The resume's own headline says the field best ("Junior Data Analyst"); the setup's choice is the fallback.
+    field = resume_profile.guess_field(data.get("headline") or "") or \
+        (body.get("field") if body.get("field") in COMMON_SKILLS else None)
+    role = body.get("role") if isinstance(body.get("role"), str) and len(body.get("role")) <= 100 else ""
+    return {"tips": resume_builder.tips(data, COMMON_SKILLS.get(field, [])),
+            "prompt": resume_builder.claude_prompt(data, role)}
 
 
 # ---------- HTTP ----------
@@ -526,7 +646,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, (UI_DIR / "index.html").read_bytes(), "text/html; charset=utf-8")
             if path == "/api/ping":
                 return self._send(200, {"ok": True})
-            if path in ("/app.js", "/setup.js"):
+            if path in ("/app.js", "/setup.js", "/builder.js", "/prepare.js"):
                 return self._send(200, (UI_DIR / path[1:]).read_bytes(), "text/javascript; charset=utf-8")
             if path == "/api/config":
                 cfg, exists = read_config()
@@ -558,6 +678,38 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(404, {"error": "Run the PDF test first."})
                 return self._send(200, pdfs[0].read_bytes(), "application/pdf",
                                   {"Content-Disposition": "inline; filename=preview.pdf"})
+            if path in ("/api/builder/preview.pdf", "/api/builder/resume.docx"):
+                f = BUILDER_PREVIEW / "resume.pdf" if path.endswith(".pdf") else BUILT
+                if not f.is_file():
+                    return self._send(404, {"error": "Create the resume first."})
+                if path.endswith(".pdf"):
+                    return self._send(200, f.read_bytes(), "application/pdf", {"Content-Disposition": "inline; filename=resume.pdf"})
+                return self._send(200, f.read_bytes(),
+                                  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                  {"Content-Disposition": "attachment; filename=resume.docx"})
+            if path == "/api/builder/templates":
+                return self._send(200, {"templates": {k: {"label": v["label"], "for": v["for"], "accent": v["accent"],
+                                                          "font": v["font"], "order": v["order"], "center": v["center"],
+                                                          "heading": v.get("heading", "border"),
+                                                          "name_accent": bool(v.get("name_accent")),
+                                                          "compact": v.get("margin", 720) < 720}
+                                                      for k, v in resume_builder.TEMPLATES.items()}})
+            if path in ("/api/notes/prep", "/api/notes/learning"):
+                d = NOTE_DIRS[path.rsplit("/", 1)[1]]
+                files = sorted((f.name for f in d.glob("*.md") if NOTE_NAME.fullmatch(f.name)), key=str.lower) \
+                    if d.exists() else []
+                return self._send(200, {"files": files})
+            if path.startswith(("/api/notes/prep/", "/api/notes/learning/")):
+                kind, name = path.split("/")[3], unquote(path.split("/", 4)[4])
+                if not NOTE_NAME.fullmatch(name):  # before building any path (no UNC lookups, no traversal)
+                    return self._send(404, {"error": "Not found."})
+                d = NOTE_DIRS[kind].resolve()
+                f = (d / name).resolve()
+                if not f.is_relative_to(d) or not f.is_file():
+                    return self._send(404, {"error": "Not found."})
+                with f.open("r", encoding="utf-8", errors="replace") as fp:
+                    text = fp.read(300_000)
+                return self._send(200, {"name": name, "text": text})
             if path == "/api/schedule":
                 cfg, _ = read_config()
                 return self._send(200, {"prompt": schedule_prompt(), "folder": host_folder(), **schedule_info(cfg)})
@@ -616,6 +768,19 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(body, dict):
                     raise ValueError("Bad request.")
                 return self._send(200, {"ok": True, **reread_skills(body)})
+            if path in ("/api/builder/parse", "/api/builder/build", "/api/builder/tips"):
+                if not isinstance(body, dict):
+                    raise ValueError("Bad request.")
+                if path.endswith("parse"):
+                    if not _upload_slots.acquire(blocking=False):
+                        return self._send(429, {"error": "Busy reading another file. Try again in a moment."})
+                    try:
+                        return self._send(200, {"ok": True, "data": resume_builder.parse(builder_source(body))})
+                    finally:
+                        _upload_slots.release()
+                if path.endswith("build"):
+                    return self._send(200, {"ok": True, **builder_build(body)})
+                return self._send(200, {"ok": True, **builder_tips(body)})
             if path == "/api/applications/status":
                 rid, status = str(body.get("id", "")), body.get("status")
                 note = body.get("note", "")

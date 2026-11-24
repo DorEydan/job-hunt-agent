@@ -30,6 +30,11 @@
   "resume_output_name": "Your Name resume",
   "skills_heading": "Technical Skills",
   "send_format": "pdf",
+  "resume_tailoring": {
+    "enabled": true,
+    "folder_layout": "company_role"
+  },
+  "_resume_tailoring_note": "enabled: reorder the skills for each job (false = send your resume as is). folder_layout: where each job's files go - date_company_role, company_role, field_company_role or role_company.",
   "target_roles": [
     "Junior Full Stack Developer",
     "Full Stack Developer (entry level)",
@@ -111,6 +116,12 @@
   },
   "dedup_days": 60,
   "pending_days": 14,
+  "ghost_jobs": {
+    "ask_when_reposted": true,
+    "repost_times": 2,
+    "block": "role"
+  },
+  "_ghost_jobs_note": "A ghost job is posted for show (investors, pipeline) with no real hiring. When the same job shows up again repost_times times, the agent asks you whether to mark it as fake. block: role = never that job again; company = nothing from that company.",
   "max_new_jobs_per_run": 15,
   "min_match_score": 6,
   "screening_answers": {
@@ -255,5 +266,18 @@
     }
   ],
   "cover_letter_file": "",
-  "_cover_letter_note": "Optional. Attached where a form has a cover-letter upload field (if cover_note_in_forms is on)."
+  "_cover_letter_note": "Optional. Attached where a form has a cover-letter upload field (if cover_note_in_forms is on).",
+  "learning": {
+    "suggest_in_runs": true,
+    "free_only": false,
+    "language": "English",
+    "platforms": [
+      "youtube",
+      "official-docs",
+      "freecodecamp",
+      "udemy",
+      "coursera"
+    ]
+  },
+  "_learning_note": "Where the agent looks for courses, on request and when many postings ask for a skill you don't have. Platforms: youtube, official-docs, freecodecamp, udemy, coursera, edx, pluralsight, linkedin-learning."
 }

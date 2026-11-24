@@ -1,6 +1,6 @@
 const TABS = [
-  ["home", "Home"], ["profile", "Profile"], ["search", "Job search"], ["sources", "Sites"], ["resumes", "Resumes"],
-  ["answers", "Applying"], ["automate", "Schedule"], ["apps", "Applications"], ["runs", "Run reports"],
+  ["home", "Home"], ["profile", "Profile"], ["search", "Job search"], ["sources", "Sites"], ["resumes", "Resumes"], ["builder", "Resume builder"],
+  ["answers", "Applying"], ["automate", "Schedule"], ["apps", "Applications"], ["prepare", "Prepare"], ["runs", "Run reports"],
 ];
 const CONFIG_TABS = new Set(["profile", "search", "sources", "resumes", "answers", "automate"]);
 const DAYS = [["sun", "Sun"], ["mon", "Mon"], ["tue", "Tue"], ["wed", "Wed"], ["thu", "Thu"], ["fri", "Fri"], ["sat", "Sat"]];
@@ -29,6 +29,39 @@ const PRESETS = [
   { id: "facebook-groups", name: "Facebook groups", needs_signin: true, search: "Recent posts in job groups you are already a member of.", apply: "Usually by email from the post.", notes: "Never joins, comments or posts." },
   { id: "telegram", name: "Telegram channel", needs_signin: false, search: "https://t.me/s/<channel-name>", apply: "The link or email in the post.", notes: "Replace <channel-name>." },
 ];
+const LAYOUT_OPTIONS = [
+  ["company_role", "Company › role", "applications/Acme/Junior DevOps Engineer/2026-03-01/", "Recommended: everything you sent one company in one place."],
+  ["field_company_role", "Field › company › role", "applications/devops/Acme/Junior DevOps Engineer/2026-03-01/", "If you apply in more than one field."],
+  ["role_company", "Role › company", "applications/Junior DevOps Engineer/Acme/2026-03-01/", "Compare how you applied to the same kind of role."],
+  ["date_company_role", "One folder per job, by date", "applications/2026-03-01_Acme_Junior DevOps Engineer/", "Simple chronological list."],
+];
+function tailoringCard() {
+  const rt = get("resume_tailoring") || { enabled: true, folder_layout: "company_role" };
+  return `<div class="card"><h3>Tailoring per job</h3>
+    ${field("resume_tailoring.enabled", "Tailor my resume for each job (reorder the skills to match the posting)", { type: "bool" })}
+    <div class="hint" style="margin:-2px 0 10px">Off: the agent sends your resume as it is. It never adds skills or changes other text either way.</div>
+    <label>Where each job's files are saved</label>
+    <div class="opts" style="grid-template-columns:1fr">${LAYOUT_OPTIONS.map(([k, l, ex, why]) => `<label class="opt ${rt.folder_layout === k ? "on" : ""}">
+      <input type="radio" name="layout" value="${k}" ${rt.folder_layout === k ? "checked" : ""}> <span><b>${l}</b> <span class="sub">${why}</span><br><code class="sub">${esc(ex)}</code></span></label>`).join("")}</div></div>`;
+}
+function reapplyCard() {
+  const g = get("ghost_jobs") || {};
+  return `<div class="card"><h3>Re-applying and ghost jobs</h3><div class="grid">
+    ${field("dedup_days", "Don't apply to the same job again for (days)", { type: "int", hint: "After this, a job that is still posted may be offered again. 60–90 is common." })}
+    ${field("pending_days", "Offer jobs you didn't answer again after (days)", { type: "int" })}
+    </div>
+    <div style="margin-top:10px">${field("ghost_jobs.ask_when_reposted", "Ask me whether a job that keeps being reposted is a ghost job (posted for show, not really hiring)", { type: "bool" })}</div>
+    <div class="grid" style="margin-top:6px">
+      ${field("ghost_jobs.repost_times", "Ask after it was posted this many times", { type: "int" })}
+      <div><label for="ghostBlock">When I mark a job as fake, skip</label><select id="ghostBlock" data-path="ghost_jobs.block" data-kind="str">
+        <option value="role" ${g.block !== "company" ? "selected" : ""}>That job only</option><option value="company" ${g.block === "company" ? "selected" : ""}>Everything from that company</option></select></div>
+    </div>
+    <div class="hint">Marked jobs get the status <i>ghost</i> in Applications and are never offered again. You can also set it there yourself.</div></div>`;
+}
+document.addEventListener("change", e => {
+  if (e.target.name === "layout") { set("resume_tailoring", { ...(get("resume_tailoring") || { enabled: true }), folder_layout: e.target.value }); render(); }
+});
+
 let state = { tab: "home", cfg: null, saved: null, exists: false, folder: "", apps: [], statuses: [], filter: "all", q: "" };
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -45,7 +78,7 @@ async function api(path, body) {
   return data;
 }
 function toast(t) { const el = $("#toast"); el.textContent = t; el.classList.add("show"); setTimeout(() => el.classList.remove("show"), 2200); }
-function updateSavebar() { $("#savebar").classList.toggle("show", !state.wizard && (dirty() || !state.exists)); $("#savestate").textContent = state.exists ? "Unsaved changes" : "Settings not saved yet"; }
+function updateSavebar() { $("#savebar").classList.toggle("show", !state.wizard && !state.builderReturn && (dirty() || !state.exists)); $("#savestate").textContent = state.exists ? "Unsaved changes" : "Settings not saved yet"; }
 
 function renderNav() {
   const counts = { apps: state.apps.length };
@@ -168,19 +201,19 @@ pages.search = () => {
     ${field("search_window_days", "Look at postings from the last (days)", { type: "int", hint: "Match it to the longest gap between runs (see Schedule)." })}
     ${field("max_new_jobs_per_run", "Max new jobs per run", { type: "int" })}
     ${field("min_match_score", "Minimum match score (1–10)", { type: "int" })}
-    ${field("dedup_days", "Don't re-apply to the same job for (days)", { type: "int" })}
-    ${field("pending_days", "Offer unapproved jobs again after (days)", { type: "int" })}
   </div></div>`;
 };
 
 pages.resumes = () => {
   const variants = Object.keys(get("base_resumes") || {}).filter(k => !k.startsWith("_"));
   $("#main").innerHTML = `<h2>Resumes</h2><p class="lead">Your resume as a Word <code>.docx</code>. The agent only reorders the skills under the skills heading for each job, then exports a small PDF.</p>
+  <div class="card"><h3>Need a new resume or a new design?</h3><p class="sub" style="margin:0">The <a href="#" data-go="builder">Resume builder</a> makes a clean one-page resume in a template that fits your field, from scratch or from your current one.</p></div>
   <div class="card"><h3>Resume versions</h3>
     <p class="sub" style="margin-top:-6px">One version is enough. Add more if you target different job types (e.g. <i>devops</i> and <i>fullstack</i>).</p>
     ${kvEditor("base_resumes", "Version name", "Path to the .docx file", { ph: "C:\\Users\\you\\Documents\\resume.docx" })}
     <div style="margin-top:12px">${field("_base_resumes_note", "Which jobs each version is for", { type: "text", hint: "The agent reads this to pick a version, e.g. “DevOps / Cloud jobs → devops. Developer jobs → fullstack.”" })}</div>
   </div>
+  ${tailoringCard()}
   <div class="card"><h3>Format</h3><div class="grid">
     ${field("skills_heading", "Skills heading in your resume", { ph: "Technical Skills", hint: "Under it, one line per group: <code>Label: skill, skill, skill</code>" })}
     ${field("resume_output_name", "Name of the PDF that gets sent", { ph: "Jane Doe resume" })}
@@ -216,6 +249,7 @@ pages.answers = () => {
     ${APPLY_METHODS.map(([k, l]) => field("apply_methods." + k, l, { type: "bool" })).join("")}
     <div class="hint">Jobs that can only be applied to in a way you switched off are listed for you to apply yourself.</div>
   </div>
+  ${reapplyCard()}
   <div class="card"><h3>Options</h3>
     ${field("cover_note_in_forms", "Paste the cover note into optional cover-letter fields", { type: "bool" })}
     ${field("notifications", "Notify me when a run finds jobs", { type: "bool" })}
@@ -256,7 +290,8 @@ pages.apps = async () => {
   $("#appsTable").addEventListener("change", async e => {
     const sel = e.target.closest("[data-status]"); if (!sel) return;
     try { const r = await api("/api/applications/status", { id: sel.dataset.status, status: sel.value, note: "changed in the control panel" });
-      toast(r.message || "Saved"); const row = state.apps.find(x => x.id === sel.dataset.status); if (row) row.status = sel.value;
+      toast(sel.value === "interview" ? "Good luck! The Prepare tab can make an interview prep." : (r.message || "Saved"));
+      const row = state.apps.find(x => x.id === sel.dataset.status); if (row) row.status = sel.value;
     } catch (err) { toast(err.message); }
   });
   draw();

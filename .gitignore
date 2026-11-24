@@ -3,6 +3,8 @@ config.json
 applications.csv
 applications/
 runs/
+prep/
+learning/
 drafts/
 *.docx
 *.pdf

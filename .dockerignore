@@ -9,6 +9,8 @@ config.tmp
 applications.csv
 applications
 runs
+prep
+learning
 drafts
 uploads
 docs

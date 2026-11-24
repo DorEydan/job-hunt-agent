@@ -13,11 +13,12 @@ import json
 import re
 import sys
 import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 P_RE = re.compile(r"<w:p[ >].*?</w:p>", re.S)
 T_RE = re.compile(r"<w:t(?:\s[^>]*)?>([^<]*)</w:t>")
-EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]{1,64}@[\w-]{1,63}(?:\.[\w-]{1,63}){1,5}")
 PHONE = re.compile(r"(?<![\w])(\+?\d[\d\s().-]{7,18}\d)(?![\w])")
 URL = re.compile(r"https?://[^\s<>\"']+|(?:www\.)?(?:linkedin\.com|github\.com)/[^\s<>\"']+", re.I)
 YEAR_RANGE = re.compile(r"((?:19|20)\d{2})\s*[–—-]\s*((?:19|20)\d{2}|present|current|now|today|היום|כיום)", re.I)
@@ -50,16 +51,44 @@ SKILL_HEADINGS = ["technical skills", "skills", "tech stack", "core skills", "ke
 DEGREE = re.compile(r"\b(B\.?Sc|B\.?A|BA|BSc|B\.?Eng|M\.?Sc|MSc|M\.?A|MBA|Ph\.?D|Bachelor|Master|Diploma|תואר)\b", re.I)
 
 
+W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+MAX_PART = 8_000_000
+
+
+def read_part(z, name, limit=MAX_PART):
+    """Read one file from the .docx with a hard size cap (the zip header's size can lie)."""
+    with z.open(name) as f:
+        data = f.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError(f"{name} is too large.")
+    return data
+
+
 def paragraphs(xml):
-    return [html.unescape("".join(T_RE.findall(p))).strip() for p in P_RE.findall(xml)]
+    """Text of each paragraph, in linear time. Word tabs and line breaks become spaces; whitespace is collapsed.
+    Callers reject DTDs/entities first (server.check_docx); ElementTree never fetches external entities."""
+    if isinstance(xml, str):
+        xml = xml.encode("utf-8")
+    root = ET.fromstring(xml)
+    out = []
+    for p in root.iter(W + "p"):
+        parts = []
+        for r in p.iter(W + "r"):
+            for el in r:
+                if el.tag == W + "t" and el.text:
+                    parts.append(el.text)
+                elif el.tag in (W + "tab", W + "br"):
+                    parts.append(" ")
+        out.append(re.sub(r"\s+", " ", "".join(parts)).strip())
+    return out
 
 
 def links(z):
     try:
-        rels = z.read("word/_rels/document.xml.rels").decode("utf-8", "replace")
-    except KeyError:
+        root = ET.fromstring(read_part(z, "word/_rels/document.xml.rels", 1_000_000))
+    except (KeyError, ET.ParseError, ValueError):
         return []
-    return [html.unescape(u) for u in re.findall(r'Target="(https?://[^"]+)"', rels)]
+    return [el.get("Target", "") for el in root if el.get("Target", "").lower().startswith(("http://", "https://"))]
 
 
 def detect_skills_heading(paras):
@@ -114,9 +143,9 @@ def level_for(years, text):
 
 def profile(data: bytes, today=None):
     with zipfile.ZipFile(io.BytesIO(data)) as z:
-        xml = z.read("word/document.xml").decode("utf-8", "replace")
+        xml = read_part(z, "word/document.xml")
         hrefs = links(z)
-    paras = [p for p in paragraphs(xml)]
+    paras = paragraphs(xml)
     nonempty = [p for p in paras if p]
     text = "\n".join(nonempty)
     out = {}
@@ -163,7 +192,7 @@ def profile(data: bytes, today=None):
             if any(re.search(r"(?<![a-z])" + re.escape(w) + r"(?![a-z])", top) for w in words):
                 out["country"] = c
                 break
-    # City: the part of a contact line that names a place (e.g. "📍 Kfar Saba, Israel | 📞 …").
+    # City: the part of a contact line that names a place (e.g. "📍 Haifa, Israel | 📞 …").
     for line in nonempty[:6]:
         for part in re.split(r"\s*[|•·]\s*", line):
             clean = re.sub(r"^[^\w]+", "", part).strip()
