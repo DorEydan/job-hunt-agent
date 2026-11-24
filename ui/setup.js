@@ -74,6 +74,30 @@ const LOCAL_PRESETS = [
 ];
 PRESETS.push(...LOCAL_PRESETS.filter(p => !PRESETS.some(x => x.id === p.id)));
 
+// Reading per field: neutral sources (university career centers, the US Bureau of Labor Statistics) plus our guides.
+const OOH = ["Occupational Outlook Handbook (US BLS): what the job involves, pay, outlook", "https://www.bls.gov/ooh/"];
+const FIELD_GUIDES = {
+  tech: [["UCF Career Services: data, cybersecurity and IT paths", "https://career.ucf.edu/channels/data-analytics-cybersecurity-information-technology/"],
+         ["UW–Madison Career Exploration Center: field guides", "https://cec.wisc.edu/?p=4439"]],
+  marketing: [["UCF Career Services: marketing paths", "https://career.ucf.edu/channels/marketing/"],
+              ["UChicago Career Advancement: industry guides", "https://careeradvancement.uchicago.edu/career-toolkit/discover-your-passion/industry-guides/"]],
+  design: [["UChicago Social Sciences: career guides (incl. UX)", "https://socialsciences.uchicago.edu/exploration/career-guides"],
+           ["UW–Madison Career Exploration Center: field guides", "https://cec.wisc.edu/?p=4439"]],
+  business: [["UChicago Career Advancement: industry guides", "https://careeradvancement.uchicago.edu/career-toolkit/discover-your-passion/industry-guides/"],
+             ["SJSU Career Center: career guides", "https://careercenter.sjsu.edu/resources/career-guides/"]],
+};
+const FIELD_GUIDE_GROUP = { software: "tech", devops: "tech", data: "tech", qa: "tech", it: "tech", security: "tech",
+  marketing: "marketing", design: "design", product: "business", sales: "business", other: "business" };
+function guidesCard() {
+  const g = [...(FIELD_GUIDES[FIELD_GUIDE_GROUP[get("field")] || "business"] || []), OOH,
+    ["Our job search guide", "https://github.com/DorEydan/job-hunt-agent/blob/main/docs/JOB_SEARCH_GUIDE.md"], ["Our resume guide", "https://github.com/DorEydan/job-hunt-agent/blob/main/docs/RESUME_GUIDE.md"],
+    ["Our cover letter guide", "https://github.com/DorEydan/job-hunt-agent/blob/main/docs/COVER_LETTER_GUIDE.md"], ["Our interview guide", "https://github.com/DorEydan/job-hunt-agent/blob/main/docs/INTERVIEW_GUIDE.md"]];
+  return `<div class="card"><h3>Guides for ${esc((FIELDS[get("field")] || FIELDS.other).label)}</h3>
+    <ul class="review">${g.map(([t, u]) => `<li><a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(t)}</a></li>`).join("")}</ul>
+    ${state.ai && state.ai.ready ? `<button class="btn" data-sug="tips">Tips for ${esc((FIELDS[get("field")] || FIELDS.other).label)} in ${esc(get("country") || "your country")} (AI)</button>
+      <div id="sugTips" class="report" style="margin-top:8px">${wiz.tips ? md(wiz.tips) : ""}</div>` : `<p class="sub">Set up an AI on the AI tab later for tips specific to your field and country.</p>`}</div>`;
+}
+
 const COMMUTE = [[5, "Only my city"], [15, "Up to 15 km"], [30, "Up to 30 km"], [50, "Up to 50 km"], [100, "Up to 100 km"], [0, "Anywhere in the country"]];
 const STEPS = ["Welcome", "Resume", "About you", "Your work", "Location", "Sites", "Applying", "Schedule", "Finish"];
 const STEP_KEYS = ["welcome", "resume", "you", "work", "location", "sites", "applying", "schedule", "finish"];
@@ -143,7 +167,8 @@ steps.work = () => {
     ${field("target_roles", "Job titles you want", { type: "lines" })}
     ${field("search_terms_en", "Search terms (English)", { type: "lines" })}
     ${field("search_terms_local", "Search terms in the local language", { type: "lines", hint: COUNTRIES[get("country")]?.lang && COUNTRIES[get("country")].lang !== "English" ? `Optional, in ${esc(COUNTRIES[get("country")].lang)}. Local boards find more with local terms.` : "Optional." })}
-  </div></div>
+  </div>${state.ai && state.ai.ready ? `<button class="btn" data-sug="terms" style="margin-top:8px">Suggest local-language search terms (AI)</button>` : ""}</div>
+  ${guidesCard()}
   <div class="card"><h3>Job types</h3><div class="grid"><div>${JOB_TYPES.slice(0, 3).map(([k, l]) => field("job_types." + k, l, { type: "bool" })).join("")}</div><div>${JOB_TYPES.slice(3).map(([k, l]) => field("job_types." + k, l, { type: "bool" })).join("")}</div></div></div>
   ${navButtons()}`;
 };
@@ -169,6 +194,8 @@ steps.sites = () => {
   const row = p => `<label class="check"><input type="checkbox" data-site="${esc(p.id)}" ${wiz.picked.has(p.id) ? "checked" : ""}> <b>${esc(p.name)}</b> <span class="pill">${p.needs_signin ? "sign-in" : "public"}</span> <span class="sub">${esc(p.notes || "")}</span></label>`;
   return `<div class="card"><h3>Recommended for ${esc(c)}</h3><p class="sub" style="margin-top:-6px">Global sites plus the local boards people in ${esc(c)} actually use. Sites marked “sign-in” open in your own Chrome, signed in.</p>
     ${rec.map(id => PRESETS.find(p => p.id === id)).filter(Boolean).map(row).join("")}</div>
+    ${state.ai && state.ai.ready ? `<div class="card"><button class="btn" data-sug="sites">Suggest more sites for ${esc(c)} and ${esc((FIELDS[get("field")] || FIELDS.other).label)} (AI)</button>
+      <div class="hint">Suggestions are added unchecked: check the ones you know and trust. The agent verifies each site on its first run.</div></div>` : ""}
     <details class="card"><summary><b>More sites</b> <span class="sub">(other countries, remote boards)</span></summary><div style="margin-top:10px">${extra.map(row).join("")}</div></details>
     <p class="sub">You can reorder, edit or add custom sites later in the Sites tab.</p>${navButtons()}`;
 };
@@ -293,7 +320,8 @@ function validateStep() {
   if (at("work") && !(get("target_roles") || []).length) return "Add at least one job title.";
   if (at("sites") && !wiz.picked.size) return "Pick at least one site.";
   if (at("schedule") && !(get("schedule.days") || []).length) return "Pick at least one day.";
-  if (at("resume") && !wiz.resume && !wiz.sample) return "Upload your resume, or continue with the sample.";
+  const hasResume = Object.entries(get("base_resumes") || {}).some(([k, v]) => !k.startsWith("_") && v && !/sample-resume\.docx$/.test(v));
+  if (at("resume") && !wiz.resume && !wiz.sample && !hasResume) return "Upload your resume, or continue with the sample.";
   return "";
 }
 function applySites() {
@@ -386,3 +414,24 @@ function startSetup() {
   state.cfg.candidate = cand;
   if (PLACEHOLDER.test(String(get("resume_output_name") || ""))) state.cfg.resume_output_name = "";
   state.wizard = true; wiz.step = 0; wiz.picked = null; state.tab = "setup"; render(); }
+
+// AI suggestions while filling the settings (only shown when an AI is set up). Results are suggestions to check.
+document.addEventListener("click", async e => {
+  const b = e.target.closest && e.target.closest("[data-sug]"); if (!b || !state.wizard) return;
+  e.preventDefault(); const kind = b.dataset.sug; b.disabled = true; const label = b.textContent; b.textContent = "Asking the AI…";
+  try {
+    const r = await api("/api/ai/suggest", { kind, country: get("country") || "", field: (FIELDS[get("field")] || FIELDS.other).label,
+      level: (LEVELS[get("experience_level")] || {}).label || "", roles: get("target_roles") || [] });
+    if (!r.ok) { wiz.msg = r.error; return render(); }
+    if (kind === "terms") set("search_terms_local", [...new Set([...(get("search_terms_local") || []), ...r.terms])]);
+    if (kind === "tips") wiz.tips = r.text;
+    if (kind === "sites") r.sites.forEach(s => {
+      const id = s.domain.replace(/[^a-z0-9]+/g, "-").slice(0, 40).replace(/^-|-$/g, "");
+      if (!PRESETS.some(p => p.id === id)) PRESETS.push({ id, name: s.name, needs_signin: s.needs_signin,
+        search: `${s.domain} search: {query}, {location}, newest first.`, apply: "The site's apply button or the company site.",
+        notes: `Suggested by AI for ${get("country")}: ${s.notes} Verify on the first run.` });
+    });
+    wiz.msg = "";
+  } catch (err) { wiz.msg = err.message; } finally { b.disabled = false; b.textContent = label; }
+  render();
+});

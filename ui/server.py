@@ -23,7 +23,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
@@ -31,6 +31,8 @@ from common import CONFIG_PATH, EXAMPLE_PATH, resume_variants  # noqa: E402
 import pdf_export  # noqa: E402
 import resume_profile  # noqa: E402
 import resume_builder  # noqa: E402
+import ai  # noqa: E402
+import match  # noqa: E402
 
 UI_DIR = ROOT / "ui"
 RUNS_DIR = ROOT / "runs"
@@ -42,7 +44,8 @@ MAX_BODY = 1_000_000
 MAX_UPLOAD_BODY = 8_000_000  # base64 of a file up to ~5.5 MB
 MAX_FILE = 5_000_000
 MAX_XML = 8_000_000  # unpacked word/document.xml
-_upload_slots = threading.BoundedSemaphore(2)  # caps memory: each upload holds a few copies of the file
+_upload_slots = threading.BoundedSemaphore(2)
+_ai_slots = threading.BoundedSemaphore(2)  # AI calls are slow and may cost money: no floods  # caps memory: each upload holds a few copies of the file
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 IN_DOCKER = os.environ.get("JOBHUNT_IN_DOCKER") == "1" or Path("/.dockerenv").exists()
 UPLOAD_KINDS = {"resume": {".docx"}, "cover_letter": {".docx", ".pdf", ".txt", ".md"}}
@@ -178,6 +181,12 @@ def validate_extras(cfg):
     if not isinstance(rt, dict) or not isinstance(rt.get("enabled", True), bool) or \
             rt.get("folder_layout", "company_role") not in LAYOUTS:
         errs.append("resume_tailoring: on/off, and a folder layout from the list.")
+    a = cfg.get("ai", {})
+    if not isinstance(a, dict) or a.get("provider", "none") not in ai.PROVIDERS or \
+            not all(isinstance(a.get(k, ""), str) and len(a.get(k, "")) <= 300 for k in ("model", "base_url", "api_key_env")) or \
+            (a.get("api_key_env") and not ai.KEY_NAME.fullmatch(a["api_key_env"])) or \
+            (a.get("base_url") and ai.check_url(a["base_url"])):
+        errs.append("ai: a provider from the list; https address (http only for localhost); key name like OPENAI_API_KEY.")
     lr = cfg.get("learning", {})
     if not isinstance(lr, dict) or not isinstance(lr.get("suggest_in_runs", True), bool) or \
             not isinstance(lr.get("free_only", False), bool) or not isinstance(lr.get("language", ""), str) or \
@@ -313,14 +322,20 @@ def health():
     on = [s.get("name", "") for s in srcs if isinstance(s, dict) and s.get("enabled")]
     add("sites", "Sites to search", bool(on), f"{len(on)} of {len(srcs)} on" if on else "",
         "Sites tab: switch on at least one site.")
+    st = ai.status(cfg)
+    add("ai", "AI for the control panel (optional)", True if st["ready"] else None,
+        f"{st['label']} · {st['model']}" if st["ready"] else "Not set up: offline features only.",
+        "AI tab: pick OpenAI, Gemini, Claude, a local model (Ollama, LM Studio) or another provider.")
+    agents = [n for n, exe in (("Claude Code", "claude"), ("Codex", "codex"), ("Gemini CLI", "gemini"), ("Aider", "aider"))
+              if shutil.which(exe)]
     if IN_DOCKER:
-        add("claude", "Claude Code on your computer", None, "",
-            "The agent runs in Claude Code on your computer (not in Docker), in this same folder.")
+        add("claude", "An agent tool on your computer", None, "",
+            "The automatic agent runs in an agent tool on your computer (Claude Code, Codex, Gemini CLI…), in this folder.")
     else:
-        claude = shutil.which("claude")
-        add("claude", "Claude Code installed", True if claude else None,
-            "claude CLI found" if claude else "Using the Claude desktop app is fine too.",
-            "Install Claude Code (desktop app or CLI). The agent runs inside it.")
+        add("claude", "Agent tool for automatic runs (optional)", True if agents else None,
+            ", ".join(agents) + " found" if agents else "None found. Everything in this panel still works.",
+            "For automatic search and applying, install an agent tool (Claude Code, Codex, Gemini CLI…). "
+            "It follows AGENTS.md in this folder.")
     return items
 
 
@@ -343,7 +358,7 @@ def host_folder():
 
 
 def schedule_prompt():
-    return (f"Open the folder {host_folder()} and follow AGENT.md in it: run Phase A (search and prepare), "
+    return (f"Open the folder {host_folder()} and follow AGENTS.md in it: run Phase A (search and prepare), "
             "write the run report, then stop and wait for my approval before sending anything.")
 
 
@@ -574,6 +589,203 @@ def builder_tips(body):
             "prompt": resume_builder.claude_prompt(data, role)}
 
 
+# ---------- AI features and their offline versions ----------
+
+def resume_skills(variant=None):
+    cfg, _ = read_config()
+    variants = resume_variants(cfg)
+    if not variants:
+        raise ValueError("Add a resume first (Resumes tab or setup).")
+    v = variant if variant in variants else next(iter(variants))
+    code, out, err = run_tool(["tools/tailor_resume.py", f"--variant={v}", "--list"], timeout=60)
+    if code != 0:
+        raise ValueError((err or out).strip()[-300:])
+    return v, json.loads(out)
+
+
+def check_text(t, name, n=60_000):
+    if not isinstance(t, str) or not t.strip() or len(t) > n:
+        raise ValueError(f"Paste the {name} (up to {n // 1000}k characters).")
+    return t
+
+
+def match_posting(body):
+    """Order the resume's skills for one posting. Offline keyword match; with AI, the AI may refine the order and score."""
+    cfg, _ = read_config()
+    posting = check_text(body.get("posting"), "job posting")
+    variant, skills = resume_skills(body.get("variant"))
+    res = match.match(skills, posting, cfg.get("field"))
+    res.update(variant=variant, skills=skills, ai_used=False)
+    if body.get("use_ai") and ai.available(cfg):
+        j = ai.chat_json(cfg, "You help a candidate tailor a resume. " + ai.UNTRUSTED,
+                         "Resume skill lines (JSON): " + json.dumps(skills, ensure_ascii=False) +
+                         "\nReturn {\"score\": 1-10 fit, \"reason\": one sentence, \"first\": {label: [skills from "
+                         "that line the posting values, most important first]}, \"line_order\": [labels, most relevant "
+                         "first], \"gaps\": [skills the posting asks for that are not in the resume]}. Use only skills that "
+                         "already appear in the resume lines for first and line_order.\n<posting>\n" + posting[:20_000] + "\n</posting>")
+        if not isinstance(j, dict):
+            j = {}
+        lst = lambda v: v if isinstance(v, list) else []  # noqa: E731
+        # keep only real skills from the resume: the AI may suggest an order, never new skills
+        fj = j.get("first") if isinstance(j.get("first"), dict) else {}
+        first = {l: [i for i in lst(fj.get(l)) if isinstance(i, str) and i in skills[l]] for l in skills}
+        order = [l for l in lst(j.get("line_order")) if isinstance(l, str) and l in skills]
+        sc = j.get("score")
+        res.update(first={l: v for l, v in first.items() if v} or res["first"],
+                   line_order=list(dict.fromkeys(order + list(skills))),
+                   score=sc if isinstance(sc, int) and not isinstance(sc, bool) and 1 <= sc <= 10 else res["score"],
+                   reason=str(j.get("reason", ""))[:300],
+                   gaps=[str(g)[:60] for g in (lst(j.get("gaps")) or res["gaps"])][:15], ai_used=True)
+    return res
+
+
+def prepare_for_posting(body):
+    """Make the tailored PDF for a pasted posting and log it, like the agent does (method: manual)."""
+    company, role = body.get("company"), body.get("role")
+    for v, n in ((company, "company"), (role, "role")):
+        if not isinstance(v, str) or not v.strip() or len(v) > 120 or CONTROL.search(v):
+            raise ValueError(f"Enter the {n} (one line).")
+    url = body.get("url") or ""
+    if not isinstance(url, str) or (url and not re.match(r"https?://\S+$", url)) or len(url) > 500:
+        raise ValueError("The link must start with http:// or https://.")
+    res = match_posting({**body, "use_ai": body.get("use_ai")})
+    code, out, err = run_tool(["tools/tracker.py", "check", f"--company={company}", f"--role={role}", f"--url={url}"], timeout=30)
+    if code == 3:
+        return {"duplicate": out.strip()}
+    if code != 0:
+        raise ValueError((err or out).strip()[-300:] or "The application log could not be checked.")
+    code, folder, err = run_tool(["tools/tracker.py", "folder", f"--company={company}", f"--role={role}"], timeout=30)
+    folder = folder.strip()
+    if code != 0 or not folder or not (ROOT / folder).resolve().is_relative_to((ROOT / "applications").resolve()):
+        raise ValueError("Could not make a folder for this job.")
+    cfg, _ = read_config()
+    args = ["tools/tailor_resume.py", f"--variant={res['variant']}", f"--out={folder}"]
+    if (cfg.get("resume_tailoring") or {}).get("enabled", True):
+        args += [f"--first={l}={','.join(v)}" for l, v in res["first"].items()]
+        args.append("--line-order=" + ",".join(res["line_order"]))
+    code, out, err = run_tool(args)
+    if code != 0:
+        raise ValueError((err or out).strip()[-300:])
+    pdf = json.loads(out[out.index("{"):]).get("pdf", "")
+    (ROOT / folder / "job.md").write_text(
+        f"# {role} - {company}\n\n- URL: {url}\n- Score: {res['score']}/10 {res.get('reason', '')}\n"
+        f"- Matched: {', '.join(res['matched'])}\n- Gaps: {', '.join(res['gaps'])}\n- Apply method: manual\n"
+        f"- Resume variant: {res['variant']}\n\n## Posting\n\n{body['posting'][:20_000]}\n", encoding="utf-8")
+    code, new_id, err = run_tool(["tools/tracker.py", "add", f"--company={company}", f"--role={role}", f"--url={url}",
+                                  "--source=manual", "--method=manual", f"--score={res['score']}", f"--folder={folder}"], timeout=30)
+    if code != 0:
+        raise ValueError((err or new_id).strip()[-300:] or "Could not log the application.")
+    return {"folder": folder, "pdf": Path(pdf).name if pdf else "", "id": new_id.strip(), **{k: res[k] for k in ("score", "matched", "gaps")}}
+
+
+def ai_polish(body):
+    cfg, _ = read_config()
+    data = body.get("data")
+    errs = resume_builder.validate(data)
+    if errs:
+        raise ValueError("; ".join(errs))
+    j = ai.chat_json(cfg, "You are a careful resume editor. Keep every fact exactly; never invent numbers, tools, titles "
+                     "or results. Where a number would help but isn't given, write [number?]. Start bullets with an action "
+                     "verb; one or two lines each.",
+                     "Rewrite the summary and bullets of this resume for the role: " + str(body.get("role", ""))[:100] +
+                     ". Return {\"summary\": str, \"experience\": [[bullets for each job, same count of jobs]], "
+                     "\"projects\": [[bullets for each project]]}.\n" + json.dumps(
+                         {k: data.get(k) for k in ("summary", "experience", "projects")}, ensure_ascii=False)[:30_000],
+                     max_tokens=2500)
+    if not isinstance(j, dict):
+        raise ai.AIError("The AI answer had the wrong shape.")
+    out = {"summary": str(j.get("summary", ""))[:2000]}
+    for sec in ("experience", "projects"):
+        rows = j.get(sec) if isinstance(j.get(sec), list) else []
+        out[sec] = [[str(b)[:600] for b in r][:12] if isinstance(r, list) else [] for r in rows][:len(data.get(sec, []))]
+    return out
+
+
+def ai_prep(body):
+    """Interview prep from the posting and the resume, without web research (the agent can add that)."""
+    cfg, _ = read_config()
+    posting = check_text(body.get("posting"), "job posting")
+    company, role = str(body.get("company", ""))[:120], str(body.get("role", ""))[:120]
+    if not company.strip() or not role.strip():
+        raise ValueError("Enter the company and the role.")
+    variant, skills = resume_skills(None)
+    guide = (ROOT / "docs" / "INTERVIEW_GUIDE.md").read_text(encoding="utf-8")[:8000] if (ROOT / "docs" / "INTERVIEW_GUIDE.md").exists() else ""
+    text = ai.chat(cfg, "You prepare a candidate for a job interview. Use only facts from the resume skills and the posting; "
+                   "never invent experience; write [fill in] where the candidate must add a detail. " + ai.UNTRUSTED +
+                   " Write Markdown in " + str(cfg.get("report_language") or "English") + ".",
+                   f"Role: {role} at {company}. Field: {cfg.get('field', '')}.\nResume skills: {json.dumps(skills, ensure_ascii=False)}\n"
+                   "Sections: The role in 3 lines; Likely technical questions (6-10); Likely behavioral questions (4-6); "
+                   "STAR story outlines from the candidate's facts; Do's and don'ts for this field; Questions to ask them; "
+                   "Gaps to brush up. Note at the top that this was made without web research.\n"
+                   f"General guide:\n{guide}\n<posting>\n{posting[:20_000]}\n</posting>", max_tokens=3000)
+    stem = re.sub(r"[^\w .()&+-]", "-", f"{company} - {role}")[:90].strip(" .-") or "interview"
+    if not re.match(r"[A-Za-z0-9]", stem) or re.fullmatch(r"(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])", stem.split(".", 1)[0].strip(), re.I):
+        stem = "prep " + stem
+    name = stem + ".md"
+    d = NOTE_DIRS["prep"]
+    d.mkdir(exist_ok=True)
+    target = (d / name).resolve()
+    if not NOTE_NAME.fullmatch(name) or not target.is_relative_to(d.resolve()):
+        raise ValueError("Could not name the prep file; try a simpler company or role name.")
+    target.write_text(text, encoding="utf-8")
+    return {"file": name}
+
+
+def ai_suggest(body):
+    """Suggestions while filling the settings: local job sites, local-language search terms, field tips."""
+    cfg, _ = read_config()
+    kind = body.get("kind")
+    country, field, level = (str(body.get(k, ""))[:60] for k in ("country", "field", "level"))
+    roles = [str(r)[:80] for r in (body.get("roles") or [])][:8]
+    if kind == "sites":
+        j = ai.chat_json(cfg, "You know the job market well and only name real, well-known job sites.",
+                         f"Job seeker in {country}, field {field}, level {level}. List up to 6 job sites people in {country} "
+                         "actually use for this (not LinkedIn/Indeed/Glassdoor). Return [{\"name\", \"domain\" (like "
+                         "example.com), \"needs_signin\": bool, \"notes\": one line}].")
+        out = []
+        for s in j if isinstance(j, list) else []:
+            dom = str(s.get("domain", "")).lower().strip() if isinstance(s, dict) else ""
+            dom = re.sub(r"^https?://|/.*$", "", dom)
+            if re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)+", dom):
+                out.append({"name": str(s.get("name", dom))[:60], "domain": dom, "needs_signin": bool(s.get("needs_signin")),
+                            "notes": str(s.get("notes", ""))[:200]})
+        return {"sites": out[:6]}
+    if kind == "terms":
+        j = ai.chat_json(cfg, "You translate job titles the way local job boards write them.",
+                         f"Country {country}. Job titles: {roles}. Return [search terms in the main local language of "
+                         f"{country}, as people search on local job boards, up to 10].")
+        return {"terms": [str(t)[:80] for t in (j if isinstance(j, list) else [])][:10]}
+    if kind == "tips":
+        text = ai.chat(cfg, "You are a career adviser. Be concrete and brief. Say when something depends on the country.",
+                       f"A {level} candidate looking for {field} jobs in {country}. Give 6-8 bullet tips for the job search, "
+                       "the resume and interviews specific to this field and country, then 3 well-known guides or "
+                       "communities to look at (names only, no invented links). Markdown.", max_tokens=900)
+        return {"text": text[:6000]}
+    raise ValueError("Unknown suggestion.")
+
+
+def offline_searches():
+    """Search links for every enabled site and term, to search by hand when no agent runs."""
+    cfg, _ = read_config()
+    terms = (cfg.get("search_terms_en") or [])[:6] + (cfg.get("search_terms_local") or [])[:4]
+    loc, days = cfg.get("search_location", ""), int(cfg.get("search_window_days") or 3)
+    out = []
+    for s in cfg.get("sources") or []:
+        if not isinstance(s, dict) or not s.get("enabled"):
+            continue
+        tpl = s.get("search", "")
+        m = re.search(r"https?://[^\s,]+", tpl)
+        if m and "{query}" in m.group(0):
+            links = [{"term": t, "url": m.group(0).replace("{query}", quote(t)).replace("{location}", quote(loc))
+                      .replace("{days}", str(days)).replace("{seconds}", str(days * 86400))} for t in terms]
+        else:
+            dom = m.group(0) if m else (re.search(r"[a-z0-9-]+(\.[a-z0-9-]+)+\.[a-z]{2,}|[a-z0-9-]+\.[a-z]{2,}", tpl.lower()) or [None])[0]
+            url = dom if (dom or "").startswith("http") else (f"https://{dom}" if dom else "")
+            links = [{"term": "open the site", "url": url}] if url else []
+        out.append({"name": s.get("name", ""), "how": tpl[:300], "apply": s.get("apply", ""), "links": links})
+    return {"sites": out, "terms": terms}
+
+
 # ---------- HTTP ----------
 
 class Handler(BaseHTTPRequestHandler):
@@ -646,7 +858,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, (UI_DIR / "index.html").read_bytes(), "text/html; charset=utf-8")
             if path == "/api/ping":
                 return self._send(200, {"ok": True})
-            if path in ("/app.js", "/setup.js", "/builder.js", "/prepare.js"):
+            if path in ("/app.js", "/setup.js", "/builder.js", "/prepare.js", "/ai.js"):
                 return self._send(200, (UI_DIR / path[1:]).read_bytes(), "text/javascript; charset=utf-8")
             if path == "/api/config":
                 cfg, exists = read_config()
@@ -710,6 +922,18 @@ class Handler(BaseHTTPRequestHandler):
                 with f.open("r", encoding="utf-8", errors="replace") as fp:
                     text = fp.read(300_000)
                 return self._send(200, {"name": name, "text": text})
+            if path == "/api/ai":
+                cfg, _ = read_config()
+                return self._send(200, {"status": ai.status(cfg), "providers": [
+                    {"id": k, "label": v[0], "base_url": v[2], "model": v[3], "key_env": v[4], "needs_key": v[5], "local": v[6]}
+                    for k, v in ai.PROVIDERS.items()]})
+            if path == "/api/offline/searches":
+                return self._send(200, offline_searches())
+            if path == "/api/offline/learn":
+                skill = q.get("skill", [""])[0].strip()
+                if not skill or len(skill) > 60:
+                    raise ValueError("Enter a skill.")
+                return self._send(200, {"links": match.learning_links(skill)})
             if path == "/api/schedule":
                 cfg, _ = read_config()
                 return self._send(200, {"prompt": schedule_prompt(), "folder": host_folder(), **schedule_info(cfg)})
@@ -768,6 +992,31 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(body, dict):
                     raise ValueError("Bad request.")
                 return self._send(200, {"ok": True, **reread_skills(body)})
+            if path == "/api/ai/key":
+                if not isinstance(body, dict):
+                    raise ValueError("Bad request.")
+                name, value = body.get("name"), body.get("value", "")
+                ai.set_key(name, value)
+                return self._send(200, {"ok": True, "key_set": bool(ai.get_key(name))})
+            if path.startswith("/api/ai/") or path in ("/api/match", "/api/match/prepare"):
+                if not isinstance(body, dict):
+                    raise ValueError("Bad request.")
+                if not _ai_slots.acquire(blocking=False):
+                    return self._send(429, {"error": "Busy with another AI request. Try again in a moment."})
+                try:
+                    cfg, _ = read_config()
+                    if path == "/api/ai/test":
+                        return self._send(200, {"ok": True, "answer": ai.chat(cfg, "You are a connection test.",
+                                                                              "Reply with one word: ready", max_tokens=20)[:100]})
+                    handler = {"/api/match": match_posting, "/api/match/prepare": prepare_for_posting,
+                               "/api/ai/polish": ai_polish, "/api/ai/prep": ai_prep, "/api/ai/suggest": ai_suggest}.get(path)
+                    if not handler:
+                        return self._send(404, {"error": "Not found"})
+                    return self._send(200, {"ok": True, **handler(body)})
+                except ai.AIError as e:
+                    return self._send(200, {"ok": False, "error": str(e)})
+                finally:
+                    _ai_slots.release()
             if path in ("/api/builder/parse", "/api/builder/build", "/api/builder/tips"):
                 if not isinstance(body, dict):
                     raise ValueError("Bad request.")

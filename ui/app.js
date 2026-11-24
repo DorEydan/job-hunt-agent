@@ -1,6 +1,6 @@
 const TABS = [
   ["home", "Home"], ["profile", "Profile"], ["search", "Job search"], ["sources", "Sites"], ["resumes", "Resumes"], ["builder", "Resume builder"],
-  ["answers", "Applying"], ["automate", "Schedule"], ["apps", "Applications"], ["prepare", "Prepare"], ["runs", "Run reports"],
+  ["answers", "Applying"], ["ai", "AI"], ["automate", "Schedule"], ["apps", "Applications"], ["manual", "Apply by hand"], ["prepare", "Prepare"], ["runs", "Run reports"],
 ];
 const CONFIG_TABS = new Set(["profile", "search", "sources", "resumes", "answers", "automate"]);
 const DAYS = [["sun", "Sun"], ["mon", "Mon"], ["tue", "Tue"], ["wed", "Wed"], ["thu", "Thu"], ["fri", "Fri"], ["sat", "Sat"]];
@@ -172,7 +172,7 @@ pages.profile = () => {
 };
 
 pages.search = () => {
-  $("#main").innerHTML = `<h2>Job search</h2><p class="lead">What to look for and what to skip. One item per line.</p>
+  $("#main").innerHTML = `<h2>Job search</h2><p class="lead">What to look for and what to skip. One item per line. Why these settings: <a href="https://github.com/DorEydan/job-hunt-agent/blob/main/docs/JOB_SEARCH_GUIDE.md" target="_blank" rel="noopener noreferrer">job search guide</a>.</p>
   <div class="card"><h3>Roles and search terms</h3><div class="grid">
     ${field("target_roles", "Target roles", { type: "lines" })}
     ${field("search_terms_en", "Search terms (English)", { type: "lines" })}
@@ -259,7 +259,7 @@ pages.answers = () => {
     ${kvEditor("screening_answers", "Question (short key)", "Your answer", { ph: "e.g. 30 days" })}
     <div class="hint">Examples: <i>notice_period</i>, <i>salary_expectation</i>, <i>authorized_to_work</i>, <i>years_experience</i>, <i>willing_to_relocate</i>. Empty = the agent will ask you.</div>
   </div>
-  <div class="card"><h3>Cover notes</h3>
+  <div class="card"><h3>Cover notes</h3><p class="sub" style="margin-top:-6px">How to write them: <a href="https://github.com/DorEydan/job-hunt-agent/blob/main/docs/COVER_LETTER_GUIDE.md" target="_blank" rel="noopener noreferrer">cover letter guide</a>.</p>
     ${kvEditor("cover_note", "Language", "Text", { multiline: true })}
     <div class="hint">Used as the email body. Placeholders: <code>{role}</code>, <code>{top_skills}</code>, <code>{phone}</code>, <code>{full_name}</code>. Language keys like <i>en</i>, <i>he</i>.</div>
   </div>`;
@@ -342,7 +342,7 @@ pages.automate = async () => {
     $("#schedOut").innerHTML = info.days.length ? `
       <p class="sub">Runs <b>${esc(names)}</b> at <b>${esc(info.time)}</b> · cron <code>${esc(info.cron)}</code>
       ${win < info.maxGap ? `<br><span class="msg warn">The longest gap between runs is ${info.maxGap} days, but searches look back only ${win}. <a href="#" id="fixWin">Set it to ${info.maxGap}</a></span>` : ""}</p>
-      <p class="sub" style="margin-top:14px">New schedule: paste in Claude Code</p>
+      <p class="sub" style="margin-top:14px">New schedule: paste in your agent tool (Claude Code, Codex, Gemini CLI…)</p>
       <pre class="prompt" id="sched">Create a scheduled task named "job-hunt-agent" that runs at cron "${esc(info.cron)}" with this prompt: ${esc(s.prompt)}</pre>
       <button class="btn" data-copy="sched">Copy</button>
       <p class="sub" style="margin-top:14px">Already scheduled? Paste this to change it</p>
@@ -352,7 +352,7 @@ pages.automate = async () => {
     $("#fixWin")?.addEventListener("click", e => { e.preventDefault(); set("search_window_days", info.maxGap); draw(); });
   };
   const sch = get("schedule") || {};
-  $("#main").innerHTML = `<h2>Schedule</h2><p class="lead">The agent runs inside Claude Code on this schedule. Sending always waits for your approval.</p>
+  $("#main").innerHTML = `<h2>Schedule</h2><p class="lead">The automatic agent runs in an agent tool that follows <code>AGENTS.md</code> (Claude Code, OpenAI Codex, Gemini CLI, Cursor…). Sending always waits for your approval. No agent tool? Use <a href="#" data-go="manual">Apply by hand</a>.</p>
   <div class="card"><h3>When to search</h3>
     <div class="row" id="dayPick">${DAYS.map(([k, l]) => `<label class="daychip"><input type="checkbox" value="${k}" ${(sch.days || []).includes(k) ? "checked" : ""}> ${l}</label>`).join("")}</div>
     <div class="row" style="margin-top:12px"><label for="schedTime" style="margin:0">Time</label>
@@ -363,7 +363,7 @@ pages.automate = async () => {
       <button class="btn" data-preset="sun,mon,tue,wed,thu,fri,sat">Daily</button></div>
     <div id="schedOut" style="margin-top:12px"></div>
   </div>
-  <div class="card"><h3>Try one run now</h3><p class="sub">Open Claude Code and paste:</p>
+  <div class="card"><h3>Try one run now</h3><p class="sub">Open your agent tool in this folder and paste:</p>
     <pre class="prompt" id="prompt">${esc(s.prompt)}</pre><button class="btn" data-copy="prompt">Copy</button></div>
   <div class="card"><h3>Before each run</h3><ol class="steps">
     <li><b>Computer on</b> and the Claude app open at the scheduled time.</li>

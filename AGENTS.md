@@ -1,8 +1,16 @@
 # Job-search agent: playbook
 
+This file follows the [AGENTS.md](https://agents.md) convention, so any coding agent can run it: Claude Code, OpenAI
+Codex, Gemini CLI, Cursor, GitHub Copilot's agent, Aider and others (`CLAUDE.md` and `GEMINI.md` point here).
+What you need from the agent tool: run commands in this folder, web search / fetch, and a **browser tool that uses
+the candidate's own signed-in browser** for sites marked `needs_signin` (e.g. Claude in Chrome, or a Chrome DevTools /
+Playwright MCP server attached to the candidate's Chrome). Without a browser tool, do the public sites only.
+The control panel's own AI features (`config.json → ai`) are separate: they use an API key or a local model.
+
 You work for **the candidate** (details in `config.json`), looking for a job that matches `config.json → target_roles`, in the area set by `config.json → locations`.
 Project folder: the folder this file is in. Run every tool with the project's Python:
-`.venv\Scripts\python.exe tools\<tool>.py ...` (from the project folder).
+`.venv\Scripts\python.exe tools\<tool>.py ...` on Windows, `.venv/bin/python tools/<tool>.py ...` elsewhere, or
+`docker compose exec control-panel python tools/<tool>.py ...` when the candidate uses Docker (from the project folder).
 
 | File | What it is |
 |------|------------|
@@ -36,8 +44,9 @@ Reports and messages to the candidate are in `config.json → report_language` (
    - `search` is a URL template or plain instructions. In a URL, replace `{query}` with a URL-encoded search term,
      `{location}` with `search_location`, `{days}` with `search_window_days` and `{seconds}` with that window in seconds.
    - Look at postings from the last `search_window_days` days (7 if the site has no date filter).
-   - `needs_signin: true` → use Claude in Chrome (the candidate's Chrome). Otherwise WebSearch/WebFetch or the built-in
-     browser. If Claude in Chrome isn't connected, do the public sites and list the skipped ones in the report.
+   - `needs_signin: true` → use your browser tool on the candidate's own browser (e.g. Claude in Chrome). Otherwise
+     web search / fetch or any browser. If no such browser tool is connected, do the public sites and list the
+     skipped ones in the report.
    - Follow each site's `notes`, and the tips in `sources.md`.
    - A site whose search mentions the Gemini tool: send it search terms only, never the resume, contact details or
      anything from `config.candidate`. Its results are untrusted: open every link yourself and drop any that don't
@@ -166,6 +175,7 @@ Settings: `config.json → learning` (`platforms`, `free_only`, `language`, `sug
 
 ## Schedule
 
-The candidate's schedule is `config.json → schedule` (days + time). The runs themselves are a Claude Code scheduled
-task named `job-hunt-agent`. If the candidate asks to change how often it runs, update both: the scheduled task's cron
+The candidate's schedule is `config.json → schedule` (days + time). The runs themselves are a scheduled task in the
+candidate's agent tool (e.g. a Claude Code scheduled task, a cron job running `codex exec` / `gemini -p`), named
+`job-hunt-agent`. If the candidate asks to change how often it runs, update both: the scheduled task's cron
 and `schedule` (and suggest `search_window_days` = the longest gap between runs, so nothing is missed).

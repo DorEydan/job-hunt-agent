@@ -122,7 +122,8 @@ pages.builder = async () => {
       <p class="sub">Full guide with sources: <a href="https://github.com/DorEydan/job-hunt-agent/blob/main/docs/RESUME_GUIDE.md" target="_blank" rel="noopener noreferrer">docs/RESUME_GUIDE.md</a></p></details>
     <div class="bwrap"><div class="bform">${builderForm()}</div>
       <div class="bside"><div class="card pvcard"><div id="pvBox">${previewHtml()}</div></div>
-        <div class="card"><div class="row"><button class="btn primary" data-bbuild ${B.busy ? "disabled" : ""}>${B.busy === "build" ? "Creating…" : "Create Word + PDF"}</button><button class="btn" data-btips ${B.busy ? "disabled" : ""}>Check my resume</button></div>
+        <div class="card"><div class="row"><button class="btn primary" data-bbuild ${B.busy ? "disabled" : ""}>${B.busy === "build" ? "Creating…" : "Create Word + PDF"}</button><button class="btn" data-btips ${B.busy ? "disabled" : ""}>Check my resume</button>
+          ${state.ai && state.ai.ready ? `<button class="btn" data-bpolish ${B.busy ? "disabled" : ""}>${B.busy === "polish" ? "Polishing…" : "Polish wording with AI"}</button>` : ""}</div>
           <div id="bOut">${resultHtml()}</div></div></div></div>`;
 };
 
@@ -133,6 +134,12 @@ function resultHtml() {
     h += `<div class="msg ${r.skills ? "ok" : "warn"}">${r.skills ? `Ready. The agent can tailor it (${Object.keys(r.skills).length} skill lines).` : esc(r.skills_error || "")}</div>
       <div class="row" style="margin-top:8px">${r.pdf_error ? `<span class="sub">${esc(r.pdf_error)}</span>` : `<a class="btn" href="/api/builder/preview.pdf" target="_blank" rel="noopener">Open PDF</a>`}
       <a class="btn" href="/api/builder/resume.docx">Download Word</a><button class="btn primary" data-buse>Use it for job applications</button></div>`;
+  }
+  if (B.polish) {
+    h += `<h3 style="margin-top:14px">AI suggestions</h3><p class="sub">Facts kept; <i>[number?]</i> marks where a number would help. Review before applying.</p>
+      ${B.polish.summary ? `<p><b>Summary:</b> ${esc(B.polish.summary)}</p>` : ""}
+      ${["experience", "projects"].map(sec => (B.polish[sec] || []).map((bl, i) => bl.length ? `<p class="sub"><b>${esc((B.data[sec][i] || {}).title || (B.data[sec][i] || {}).name || "")}</b></p><ul>${bl.map(b => `<li>${esc(b)}</li>`).join("")}</ul>` : "").join("")).join("")}
+      <button class="btn primary" data-bapply>Apply these changes</button>`;
   }
   if (B.tips) {
     h += `<h3 style="margin-top:14px">Suggestions</h3>${B.tips.tips.length ? `<ul class="review">${B.tips.tips.map(t => `<li>${esc(t)}</li>`).join("")}</ul>` : `<p class="msg ok">Looks good.</p>`}
@@ -154,7 +161,7 @@ document.addEventListener("change", e => {
   if (t.dataset && t.dataset.b === "page") bset("page", t.value);
 });
 document.addEventListener("click", async e => {
-  const el = e.target.closest && e.target.closest("[data-bstart],[data-badd],[data-bdel],[data-bmv],[data-bbuild],[data-btips],[data-buse],[data-brestart],[data-bback]");
+  const el = e.target.closest && e.target.closest("[data-bstart],[data-badd],[data-bdel],[data-bmv],[data-bbuild],[data-btips],[data-buse],[data-brestart],[data-bback],[data-bpolish],[data-bapply]");
   if (!el || state.tab !== "builder") return;
   e.preventDefault();
   const d = el.dataset;
@@ -181,6 +188,17 @@ document.addEventListener("click", async e => {
       try { B.result = await api("/api/builder/build", { data: B.data, template: B.template }); }
       catch (err) { B.msg = err.message; } finally { B.busy = ""; }
       return render();
+    }
+    if (d.bpolish !== undefined) {
+      B.busy = "polish"; B.msg = ""; render();
+      try { const r = await api("/api/ai/polish", { data: B.data, role: (get("target_roles") || [])[0] || "" }); if (r.ok) B.polish = r; else B.msg = r.error; }
+      catch (err) { B.msg = err.message; } finally { B.busy = ""; }
+      return render();
+    }
+    if (d.bapply !== undefined && B.polish) {
+      if (B.polish.summary) B.data.summary = B.polish.summary;
+      ["experience", "projects"].forEach(sec => (B.polish[sec] || []).forEach((bl, i) => { if (B.data[sec][i] && bl.length) B.data[sec][i].bullets = bl; }));
+      B.polish = null; B.result = null; saveDraft(); toast("Applied. Check the [number?] marks."); return render();
     }
     if (d.btips !== undefined) {
       B.tips = await api("/api/builder/tips", { data: B.data, field: get("field") || "", role: (get("target_roles") || [])[0] || "" });

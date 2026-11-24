@@ -370,6 +370,150 @@ class GhostJobsAndFolders(unittest.TestCase):
         self.assertEqual(len(server.validate_extras(c)), 2)
 
 
+class FakeAI:
+    """A tiny local server that answers like OpenAI-compatible and Anthropic APIs (no network, no real keys)."""
+    def __init__(self, reply="ready", redirect=False):
+        import http.server
+        outer = self
+        self.requests = []
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                outer.requests.append((self.path, {k.lower(): v for k, v in self.headers.items()}, body))
+                if redirect:
+                    self.send_response(302)
+                    self.send_header("Location", "http://127.0.0.1:9/steal")
+                    self.end_headers()
+                    return
+                if self.path.endswith("/v1/messages"):
+                    out = {"content": [{"type": "text", "text": reply}]}
+                else:
+                    out = {"choices": [{"message": {"content": reply}}]}
+                data = json.dumps(out).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        self.srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        self.url = f"http://127.0.0.1:{self.srv.server_address[1]}"
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.srv.shutdown()
+
+
+class AILayer(unittest.TestCase):
+    def setUp(self):
+        import ai
+        self.ai = ai
+        self.env_backup = ai.ENV_PATH
+        self.tmp = tempfile.TemporaryDirectory()
+        ai.ENV_PATH = Path(self.tmp.name) / ".env"
+
+    def tearDown(self):
+        self.ai.ENV_PATH = self.env_backup
+        self.tmp.cleanup()
+
+    def test_urls(self):
+        c = self.ai.check_url
+        self.assertEqual(c("https://api.openai.com/v1"), "")
+        self.assertEqual(c("http://localhost:11434/v1"), "")
+        self.assertEqual(c("http://127.0.0.1:1234/v1"), "")
+        for bad in ("http://example.com/v1", "http://192.168.1.5/v1", "ftp://x", "https://user:pw@host/v1", "file:///etc"):
+            self.assertTrue(c(bad), bad)
+
+    def test_keys_stay_in_env_file(self):
+        self.ai.set_key("OPENAI_API_KEY", "sk-test123")
+        self.assertEqual(self.ai.get_key("OPENAI_API_KEY"), "sk-test123")
+        for name, value in (("PATH", "x"), ("OPENAI_API_KEY", "a\nB_API_KEY=y"), ("OPENAI_API_KEY", "has space")):
+            with self.assertRaises(ValueError):
+                self.ai.set_key(name, value)
+        self.assertEqual(self.ai.get_key("PATH"), "")  # only *_API_KEY names can be read
+        st = self.ai.status({"ai": {"provider": "openai"}})
+        self.assertTrue(st["key_set"])
+        self.assertNotIn("sk-test123", json.dumps(st))
+
+    def test_openai_compatible_and_anthropic(self):
+        fake = FakeAI(reply='{"ok": true}')
+        try:
+            self.ai.set_key("CUSTOM_AI_API_KEY", "k1")
+            cfg = {"ai": {"provider": "custom", "base_url": fake.url + "/v1", "model": "m", "api_key_env": "CUSTOM_AI_API_KEY"}}
+            self.assertEqual(self.ai.chat_json(cfg, "s", "u"), {"ok": True})
+            path, headers, body = fake.requests[-1]
+            self.assertEqual(path, "/v1/chat/completions")
+            self.assertEqual(headers["authorization"], "Bearer k1")
+            self.assertEqual(body["model"], "m")
+            self.ai.set_key("CLAUDE_TEST_API_KEY", "k2")
+            cfg = {"ai": {"provider": "anthropic", "base_url": fake.url, "model": "c", "api_key_env": "CLAUDE_TEST_API_KEY"}}
+            self.assertEqual(self.ai.chat(cfg, "s", "u"), '{"ok": true}')
+            path, headers, body = fake.requests[-1]
+            self.assertEqual(path, "/v1/messages")
+            self.assertEqual(headers["x-api-key"], "k2")
+            self.assertEqual(body["system"], "s")
+        finally:
+            fake.close()
+
+    def test_no_redirects_and_no_key_to_other_servers(self):
+        fake = FakeAI(redirect=True)
+        try:
+            cfg = {"ai": {"provider": "custom", "base_url": fake.url + "/v1", "model": "m"}}
+            with self.assertRaises(self.ai.AIError):
+                self.ai.chat(cfg, "s", "u")
+            self.assertEqual(len(fake.requests), 1)  # the redirect was not followed
+            self.ai.set_key("OPENAI_API_KEY", "sk-real")
+            cfg = {"ai": {"provider": "openai", "base_url": fake.url + "/v1", "model": "m"}}
+            with self.assertRaises(self.ai.AIError):  # the OpenAI key is not sent to another address
+                self.ai.chat(cfg, "s", "u")
+            self.assertEqual(len(fake.requests), 1)
+        finally:
+            fake.close()
+
+    def test_none_means_offline(self):
+        self.assertFalse(self.ai.available({"ai": {"provider": "none"}}))
+        self.assertFalse(self.ai.available({}))
+        with self.assertRaises(self.ai.AIError):
+            self.ai.chat({}, "s", "u")
+
+
+class OfflineFeatures(unittest.TestCase):
+    def test_keyword_match_orders_only_existing_skills(self):
+        import match
+        skills = {"Languages": ["JavaScript", "Python", "C#"], "Tools": ["Git", "Docker", "AWS"]}
+        r = match.match(skills, "Junior role: Docker and AWS, some Python. Kubernetes and CI/CD a plus.", "devops")
+        self.assertEqual(r["line_order"][0], "Tools")
+        self.assertEqual(r["first"]["Tools"], ["Docker", "AWS"])
+        self.assertIn("Kubernetes", r["gaps"])
+        self.assertTrue(all(i in skills[l] for l, v in r["first"].items() for i in v))
+
+    def test_search_and_course_links(self):
+        import match
+        links = match.learning_links("Docker & K8s")
+        self.assertTrue(all(u.startswith("https://") for u in links.values()))
+        self.assertIn("Docker+%26+K8s", links["udemy"])
+        s = server.offline_searches()
+        self.assertTrue(s["sites"])
+        self.assertTrue(any(l["url"].startswith("https://") for x in s["sites"] for l in x["links"]))
+
+    def test_match_endpoint_without_ai(self):
+        r = server.match_posting({"posting": "We use React and Node.js with SQL. Kubernetes is a plus."})
+        self.assertFalse(r["ai_used"])
+        self.assertIn("React", r["matched"])
+
+    def test_ai_settings_validated(self):
+        c = json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))
+        self.assertEqual(server.validate_config(c), [])
+        for bad in ({"provider": "evil"}, {"provider": "custom", "base_url": "http://example.com"},
+                    {"provider": "openai", "api_key_env": "PATH"}):
+            c["ai"] = bad
+            self.assertEqual(len(server.validate_extras(c)), 1, bad)
+
+
 class SetupSettings(unittest.TestCase):
     def cfg(self):
         return json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))
@@ -450,7 +594,7 @@ class ServerGuards(unittest.TestCase):
         try:
             self.assertEqual(self.req("GET", "/api/notes/prep"), 200)
             self.assertEqual(self.req("GET", "/api/notes/prep/Acme%20-%20Junior%20DevOps.md"), 200)
-            for bad in ("..%2Fconfig.json", "..%2F..%2FREADME.md", "%2E%2E%2FAGENT.md", "x.txt", "..%5Cconfig.json"):
+            for bad in ("..%2Fconfig.json", "..%2F..%2FREADME.md", "%2E%2E%2FAGENTS.md", "x.txt", "..%5Cconfig.json"):
                 self.assertEqual(self.req("GET", "/api/notes/prep/" + bad), 404, bad)
             self.assertEqual(self.req("GET", "/api/notes/secret"), 404)
         finally:

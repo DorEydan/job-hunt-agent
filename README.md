@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
-An AI agent, built on **Claude Code**, that runs a job search end to end: it searches the job boards of your
+An AI agent that runs a job search end to end, with **any AI** (Claude, GPT, Gemini, a local model…) or **none**: it searches the job boards of your
 country on your schedule, filters and scores postings, tailors the resume for each job, and sends applications
 **only after you approve them**. A local control panel handles setup and tracking, and a first-run wizard sets
 everything up from your resume.
@@ -37,8 +37,32 @@ everything up from your resume.
 |----------|-----|
 | Python 3.11+ (Windows) **or** Docker | The tools and the control panel |
 | Microsoft Word (Windows) **or** LibreOffice (included in the Docker image) | Exporting the tailored resume to PDF |
-| [Claude Code](https://claude.com/claude-code) (desktop app or CLI) | The agent itself |
-| Claude in Chrome extension | Sites that need your sign-in: LinkedIn, job boards, Gmail |
+| Optional: an AI ([AI tab](#ai-any-provider-or-none)) | Smarter matching, wording, interview prep and suggestions in the panel |
+| Optional: an agent tool that reads [AGENTS.md](AGENTS.md) (Claude Code, OpenAI Codex, Gemini CLI, Cursor…) | Fully automatic search and applying |
+| Optional: a browser tool for that agent (e.g. Claude in Chrome) | Sites that need your sign-in: LinkedIn, job boards, Gmail |
+
+## AI: any provider, or none
+
+| Mode | What you get |
+|------|--------------|
+| **No AI** | Setup wizard, resume builder and its checks, *Apply by hand* (search links for every site; paste a posting → keyword match, gaps, a tailored PDF, logged), course search links, guides, the application log and ghost-job blocking |
+| **An AI in the panel** (AI tab) | Everything above, plus: AI ranking of a posting against your resume, polished resume wording (facts kept), interview prep from a posting, and suggestions while setting up: local job sites for any country, search terms in the local language, tips for your field and country |
+| **An agent tool** (reads `AGENTS.md`) | The full automatic agent: searches your sites on a schedule, tailors, applies after your approval, researches interview prep and courses on the web |
+
+Providers on the AI tab: OpenAI (GPT), Google Gemini, Anthropic (Claude), Ollama and LM Studio (local, no key),
+OpenRouter, Groq, Mistral, DeepSeek, or any OpenAI-compatible server. Two standard protocols cover them all
+(OpenAI-compatible chat completions and Anthropic Messages), with the standard key names (`OPENAI_API_KEY`,
+`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, …). Keys are read from environment variables or a git-ignored `.env`, are
+never stored in `config.json` and never shown again; a provider's key is only ever sent to that provider's own address,
+redirects are not followed, and plain `http` is allowed only for a model on your own computer.
+
+## Guides
+
+Each part of the project follows a short guide, summarized from university career centers and other sources (linked
+in each guide) and shown in the panel where it's relevant:
+[job search](docs/JOB_SEARCH_GUIDE.md) · [resume](docs/RESUME_GUIDE.md) · [cover letter](docs/COVER_LETTER_GUIDE.md) ·
+[interview](docs/INTERVIEW_GUIDE.md). The setup wizard adds reading for your field, and with an AI, tips for your
+field and country.
 
 ## Resume builder
 
@@ -154,7 +178,7 @@ See a full [sample run report](examples/sample-run-report.md) and a [sample appl
 ## Project layout
 
 ```
-AGENT.md                 the playbook the agent follows on every run
+AGENTS.md                the playbook any agent tool follows (CLAUDE.md, GEMINI.md point to it)
 sources.md               search tips and notes the agent learns while running
 config.example.json      template settings  →  copied to config.json on first start
 start.bat / start.ps1    one-click setup + control panel
@@ -164,6 +188,8 @@ tools/
   tailor_resume.py       reorder skills in a .docx, export + shrink the PDF
   resume_profile.py      reads an uploaded resume to pre-fill the setup wizard
   resume_builder.py      builds a resume in 8 templates, or reads one to redesign it
+  ai.py                  one small client for any AI provider (OpenAI-compatible or Anthropic)
+  match.py               offline matching of a posting to your resume; course search links
   pdf_export.py          Word (Windows) or LibreOffice (Docker, Linux, macOS)
   tracker.py             application log with the "no re-send within 60 days" rule
   shrink_pdf.py          font subsetting for small PDFs
@@ -190,6 +216,8 @@ get their defaults automatically, so an older `config.json` keeps working.
 | **Resumes** | One or more resume versions (e.g. `devops`, `fullstack`) and which jobs each is for; tailoring on/off and the folder layout; the skills heading; the name of the sent PDF; a test export |
 | **Resume builder** | Build or redesign a resume in 8 templates (see above) |
 | **Applying** | Re-apply window and ghost-job handling; which ways of applying are allowed (quick apply, job-board send-CV, company forms, email, social messages); whether to paste the cover note into optional fields; notifications; screening answers; cover notes per language |
+| **AI** | Provider, model, key (saved in `.env`), connection test |
+| **Apply by hand** | Search links per site; paste a posting → match, gaps, tailored PDF, logged |
 | **Prepare** | Interview prep per application; course search per skill; learning platforms and free-only |
 | **Schedule** | Days and time (presets: 3× a week, 2× a week, workdays, daily). It generates the exact text to paste into Claude Code to create or update the scheduled task, and warns if the look-back window is shorter than the gap between runs |
 
@@ -208,7 +236,7 @@ types passwords. New sites the agent discovers are added switched off, for you t
 ## Rules the agent keeps
 
 No CAPTCHA solving, no account creation, no passwords: those jobs are handed back to you.
-A capped number of new jobs per run (default 15), at a human pace on LinkedIn. Details in [AGENT.md](AGENT.md).
+A capped number of new jobs per run (default 15), at a human pace on LinkedIn. Details in [AGENTS.md](AGENTS.md).
 
 ## License
 

@@ -279,5 +279,12 @@
       "coursera"
     ]
   },
-  "_learning_note": "Where the agent looks for courses, on request and when many postings ask for a skill you don't have. Platforms: youtube, official-docs, freecodecamp, udemy, coursera, edx, pluralsight, linkedin-learning."
+  "_learning_note": "Where the agent looks for courses, on request and when many postings ask for a skill you don't have. Platforms: youtube, official-docs, freecodecamp, udemy, coursera, edx, pluralsight, linkedin-learning.",
+  "ai": {
+    "provider": "none",
+    "model": "",
+    "base_url": "",
+    "api_key_env": ""
+  },
+  "_ai_note": "AI for the control panel's own features (any provider: openai, gemini, anthropic, ollama, lmstudio, openrouter, groq, mistral, deepseek, custom). Keys live in environment variables or .env, never here. The automatic agent itself runs in an agent tool that reads AGENTS.md."
 }
