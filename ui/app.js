@@ -45,7 +45,7 @@ async function api(path, body) {
   return data;
 }
 function toast(t) { const el = $("#toast"); el.textContent = t; el.classList.add("show"); setTimeout(() => el.classList.remove("show"), 2200); }
-function updateSavebar() { $("#savebar").classList.toggle("show", dirty() || !state.exists); $("#savestate").textContent = state.exists ? "Unsaved changes" : "Settings not saved yet"; }
+function updateSavebar() { $("#savebar").classList.toggle("show", !state.wizard && (dirty() || !state.exists)); $("#savestate").textContent = state.exists ? "Unsaved changes" : "Settings not saved yet"; }
 
 function renderNav() {
   const counts = { apps: state.apps.length };
@@ -53,7 +53,7 @@ function renderNav() {
     `<button data-tab="${id}" class="${state.tab === id ? "active" : ""}">${name}${counts[id] ? `<span class="n">${counts[id]}</span>` : ""}</button>`).join("");
 }
 $("#nav").addEventListener("click", e => { const b = e.target.closest("button"); if (b) go(b.dataset.tab); });
-function go(tab) { state.tab = tab; try { localStorage.setItem("tab", tab); } catch (e) {} history.replaceState(null, "", "#" + tab); render(); }
+function go(tab) { if (state.wizard) return; state.tab = tab; try { localStorage.setItem("tab", tab); } catch (e) {} history.replaceState(null, "", "#" + tab); render(); }
 
 // ---------- generic form binding ----------
 function get(path) { return path.split(".").reduce((o, k) => (o ?? {})[k], state.cfg); }
@@ -124,6 +124,8 @@ pages.home = async () => {
     return `<li><span class="dot ${cls}">${mark}</span><div><b>${esc(it.label)}</b>${it.detail ? ` <span class="sub">· ${esc(it.detail)}</span>` : ""}
       ${fix ? `<div class="sub">${esc(fix)}${goTo[it.key] && it.ok !== true ? ` <a href="#" data-go="${goTo[it.key]}">Open</a>` : ""}${it.warn ? ` <a href="#" data-go="resumes">Open</a>` : ""}</div>` : ""}</div></li>`;
   }).join("") + `<li><span class="dot na">→</span><div><b>Schedule it</b><div class="sub">When everything above is green, set up the automatic runs. <a href="#" data-go="automate">Open</a></div></div></li>`;
+  $("#main").insertAdjacentHTML("beforeend", `<p class="sub">Want to start over? <a href="#" id="rerunSetup">Run the setup wizard again</a> (your current settings are the starting point).</p>`);
+  $("#rerunSetup").addEventListener("click", e => { e.preventDefault(); startSetup(); });
 };
 document.addEventListener("click", e => { const a = e.target.closest && e.target.closest("[data-go]"); if (a) { e.preventDefault(); go(a.dataset.go); } });
 
@@ -425,8 +427,8 @@ window.addEventListener("hashchange", () => {
 window.addEventListener("beforeunload", e => { if (dirty()) { e.preventDefault(); e.returnValue = ""; } });
 
 async function render() {
-  renderNav();
-  try { await pages[state.tab](); } catch (err) { $("#main").innerHTML = `<div class="card msg bad">${esc(err.message)}</div>`; }
+  renderNav(); updateSavebar();
+  try { await pages[state.wizard ? "setup" : state.tab](); } catch (err) { $("#main").innerHTML = `<div class="card msg bad">${esc(err.message)}</div>`; }
 }
 (async () => {
   const d = await api("/api/config");
@@ -438,5 +440,6 @@ async function render() {
   const hashTab = location.hash.slice(1);
   if (TABS.some(x => x[0] === hashTab)) state.tab = hashTab;
   else if (!d.exists) state.tab = "home";
+  if (!d.exists || d.config.setup_complete === false) { startSetup(); return; }
   updateSavebar(); render();
 })();

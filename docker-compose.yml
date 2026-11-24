@@ -1,0 +1,22 @@
+# docker compose up -d   ->  open http://localhost:8765
+services:
+  control-panel:
+    build: .
+    image: job-hunt-agent
+    container_name: job-hunt-agent
+    # Only this computer can reach the panel. Keep the 127.0.0.1 part.
+    ports:
+      - "127.0.0.1:8765:8765"
+    # Your settings, resumes, applications and run reports live in this folder on your computer,
+    # so Claude Code (which runs the agent) and the container see the same files.
+    volumes:
+      - .:/app
+    environment:
+      # Shown in the copy-ready prompts, so Claude Code opens the right folder on your computer.
+      JOBHUNT_HOST_FOLDER: ${JOBHUNT_HOST_FOLDER:-}
+    restart: unless-stopped
+    # Hardening: no extra privileges, bounded memory and processes.
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 1g
+    pids_limit: 200

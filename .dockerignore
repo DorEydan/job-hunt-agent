@@ -1,0 +1,17 @@
+.git
+.github
+.venv
+__pycache__
+*.pyc
+.preview
+config.json
+config.tmp
+applications.csv
+applications
+runs
+drafts
+uploads
+docs
+*.docx
+*.pdf
+!examples/sample-resume.docx

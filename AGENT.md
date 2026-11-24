@@ -47,7 +47,11 @@ Reports and messages to the candidate are in `config.json → report_language` (
    - Required experience ≤ `seniority.max_years_required` years (or says junior / entry level / graduate / student, or the local-language equivalent).
    - Job type is allowed in `job_types` (full_time, part_time, student, internship, contract, freelance). Student
      positions also need `seniority.include_student_positions`.
-   - Location is in `locations.preferred`, or remote (`locations.accept_remote`) / hybrid (`locations.accept_hybrid`) within reach of `candidate.city`.
+   - Location: on-site and hybrid jobs must be within `locations.max_commute_km` of `candidate.city` (0 = anywhere in
+     `country`; estimate the distance between the two cities). Remote jobs pass if `locations.accept_remote`, hybrid ones
+     only if `locations.accept_hybrid`. Jobs in `locations.preferred` rank higher. If `screening_answers.willing_to_relocate`
+     is "yes", a farther job may be listed under "Suspicious / skipped" with the distance, for the candidate to decide.
+   - The role fits `field` and `experience_level` (the setup wizard's choices) and `target_roles`.
    - Company is not in `exclude_companies` (case-insensitive, ignore Ltd/Inc).
    - The posting contains none of `exclude_keywords`, and at least one of `must_have_keywords` when that list is not empty.
    - Score it 1–10 for fit with the resume (stack overlap, seniority, location). Keep only scores ≥ `min_match_score`.
@@ -88,8 +92,12 @@ For each approved number, using that job's folder and the PDF in it:
 - **linkedin-easy-apply**: open the job in Chrome → Easy Apply → upload the PDF (replace any old resume) → contact details from `config.candidate` → screening questions per rule 6 → review → submit. Wait for "Application sent" / "Your application was sent".
 - **alljobs / drushim / jobmaster**: the site's send-CV flow; upload the PDF if the site allows a file. If the site can only send the CV stored in the candidate's profile there, stop and ask the candidate once whether that's OK for these sites, and save the answer in `config.json` as `"site_stored_cv_ok": true/false`.
 - **email:<address>**: send from the candidate's Gmail (Gmail connector if one is available, otherwise Gmail in Chrome). Subject: `Application: <role> – <full_name>` (translate the subject when the post is in another language). Body: `config.cover_note.en`, or the cover note in the post's language if there is one, filled in with the role, the top 3 matching skills and the candidate's phone. Attach the PDF.
-- **ats:<url>** (Comeet, Greenhouse, Lever, Ashby…): fill name, email, phone, LinkedIn, GitHub from `config.candidate`, upload the PDF, answer questions per rule 6, submit. If it requires creating an account: mark `manual`.
-- **Cover letter fields:** if `cover_note_in_forms` is true and a form has an optional cover letter / message field, paste the filled-in cover note there. If false, leave optional fields empty.
+- **ats:<url>** (Comeet, Greenhouse, Lever, Ashby…): fill name, email, phone, LinkedIn, GitHub and website/portfolio
+  (`candidate.portfolio`) from `config.candidate`, upload the PDF, answer questions per rule 6, submit. If it requires creating an account: mark `manual`.
+- **Cover letter fields:** if `cover_note_in_forms` is true: where a form has a cover-letter *upload*, attach
+  `cover_letter_file` (if set); where it has a cover letter / message *text* box, paste the filled-in cover note
+  (or the text of `cover_letter_file` if the note is empty). If false, leave optional fields empty. Never edit the
+  cover letter file itself.
 - **facebook-dm**: send a short message based on the cover note with the PDF attached, only to the poster of that approved post.
 
 After each one:

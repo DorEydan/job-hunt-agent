@@ -5,8 +5,12 @@ Runs only on this computer (127.0.0.1) and serves one page: setup, resume check,
 application log, run reports and automation setup. Standard library only.
 
     .venv\\Scripts\\python.exe ui\\server.py [--port 8765] [--no-browser]
+    docker compose up   (see Dockerfile; listens on 0.0.0.0 inside the container only)
 """
 import argparse
+import base64
+import html as htmllib
+import io
 import csv
 import json
 import os
@@ -16,6 +20,7 @@ import subprocess
 import sys
 import threading
 import webbrowser
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -23,13 +28,23 @@ from urllib.parse import parse_qs, urlsplit
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 from common import CONFIG_PATH, EXAMPLE_PATH, resume_variants  # noqa: E402
+import pdf_export  # noqa: E402
+import resume_profile  # noqa: E402
 
 UI_DIR = ROOT / "ui"
 RUNS_DIR = ROOT / "runs"
 CSV_PATH = ROOT / "applications.csv"
 PREVIEW_DIR = ROOT / ".preview"
+UPLOAD_DIR = ROOT / "uploads"
 PY = sys.executable
 MAX_BODY = 1_000_000
+MAX_UPLOAD_BODY = 8_000_000  # base64 of a file up to ~5.5 MB
+MAX_FILE = 5_000_000
+MAX_XML = 8_000_000  # unpacked word/document.xml
+_upload_slots = threading.BoundedSemaphore(2)  # caps memory: each upload holds a few copies of the file
+CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+IN_DOCKER = os.environ.get("JOBHUNT_IN_DOCKER") == "1" or Path("/.dockerenv").exists()
+UPLOAD_KINDS = {"resume": {".docx"}, "cover_letter": {".docx", ".pdf", ".txt", ".md"}}
 STATUSES = ["prepared", "sent", "manual", "failed", "skipped"]
 RUN_NAME = re.compile(r"\d{4}-\d{2}-\d{2}[A-Za-z0-9_-]*\.md")  # always used with fullmatch
 VARIANT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,39}")  # always used with fullmatch
@@ -47,6 +62,7 @@ def read_config():
     if not CONFIG_PATH.exists():
         return example, False
     cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    cfg.setdefault("setup_complete", True)  # configs from before the setup wizard are already set up
     for k, v in example.items():  # settings added in newer versions get their defaults
         cfg.setdefault(k, v)
     return cfg, True
@@ -56,10 +72,20 @@ STR_LISTS = ["target_roles", "search_terms_en", "search_terms_local"]
 INTS = ["dedup_days", "pending_days", "max_new_jobs_per_run", "min_match_score"]
 
 
+def check_file_path(label, path, exts):
+    if not isinstance(path, str):
+        return [f"{label}: must be text."]
+    if path and not path.lower().endswith(tuple(exts)):
+        return [f"{label}: must be a {' / '.join(sorted(exts))} file."]
+    if path.strip().replace("\\", "/").startswith("//"):
+        return [f"{label}: network paths are not allowed. Copy the file to this computer."]
+    return []
+
+
 def check_resume_path(name, path):
     if not isinstance(path, str) or not path.lower().endswith(".docx"):
         return [f"Resume '{name}': the path must point to a .docx file."]
-    if path.startswith(("\\\\", "//")):
+    if path.strip().replace("\\", "/").startswith("//"):
         return [f"Resume '{name}': network paths are not allowed. Copy the file to this computer."]
     return []
 
@@ -133,8 +159,16 @@ def validate_extras(cfg):
         v = cfg.get(k, [])
         if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
             errs.append(f"{k}: must be a list of text lines.")
-    if not isinstance(cfg.get("search_location", ""), str):
-        errs.append("search_location: must be text.")
+    for k in ("search_location", "country", "field", "experience_level"):
+        if not isinstance(cfg.get(k, ""), str) or len(cfg.get(k, "")) > 100:
+            errs.append(f"{k}: must be text (up to 100 characters).")
+    if not isinstance(cfg.get("setup_complete", True), bool):
+        errs.append("setup_complete: must be on or off.")
+    loc = cfg.get("locations")
+    km = loc.get("max_commute_km", 0) if isinstance(loc, dict) else 0
+    if not isinstance(km, int) or isinstance(km, bool) or not 0 <= km <= 5000:
+        errs.append("locations.max_commute_km: a whole number from 0 (no limit) to 5000.")
+    errs += check_file_path("cover_letter_file", cfg.get("cover_letter_file", ""), UPLOAD_KINDS["cover_letter"])
     for k in ("cover_note_in_forms", "notifications"):
         if not isinstance(cfg.get(k, True), bool):
             errs.append(f"{k}: must be on or off.")
@@ -232,9 +266,14 @@ def health():
             missing.append(mod)
     add("packages", "Python packages", not missing, "fontTools, pypdf" if not missing else "",
         f"Missing: {', '.join(missing)}. Run start.bat again (it installs requirements.txt).")
-    w = check_word()
-    add("word", "Microsoft Word (for PDF export)", bool(w["ok"]), w["detail"],
-        "Install Microsoft Word on this computer. It is used to turn the resume into a PDF.")
+    if pdf_export.engine() == "word":
+        w = check_word()
+        add("word", "Microsoft Word (for PDF export)", bool(w["ok"]), w["detail"],
+            "Install Microsoft Word, or use Docker / LibreOffice (see README). It turns the resume into a PDF.")
+    else:
+        so = pdf_export.soffice_path()
+        add("word", "LibreOffice (for PDF export)", bool(so), "LibreOffice" if so else "",
+            "Install LibreOffice, or run the panel with Docker (it includes LibreOffice).")
     add("config", "Settings saved", exists, "config.json" if exists else "",
         "Fill in the Profile tab and press Save.")
     cand = cfg.get("candidate", {})
@@ -253,10 +292,14 @@ def health():
     on = [s.get("name", "") for s in srcs if isinstance(s, dict) and s.get("enabled")]
     add("sites", "Sites to search", bool(on), f"{len(on)} of {len(srcs)} on" if on else "",
         "Sites tab: switch on at least one site.")
-    claude = shutil.which("claude")
-    add("claude", "Claude Code installed", True if claude else None,
-        "claude CLI found" if claude else "Using the Claude desktop app is fine too.",
-        "Install Claude Code (desktop app or CLI). The agent runs inside it.")
+    if IN_DOCKER:
+        add("claude", "Claude Code on your computer", None, "",
+            "The agent runs in Claude Code on your computer (not in Docker), in this same folder.")
+    else:
+        claude = shutil.which("claude")
+        add("claude", "Claude Code installed", True if claude else None,
+            "claude CLI found" if claude else "Using the Claude desktop app is fine too.",
+            "Install Claude Code (desktop app or CLI). The agent runs inside it.")
     return items
 
 
@@ -270,9 +313,145 @@ def read_applications():
     return [{k: r.get(k, "") for k in keep} for r in rows]
 
 
+def host_folder():
+    """The project folder as seen by Claude Code on the user's computer."""
+    env = os.environ.get("JOBHUNT_HOST_FOLDER", "").strip()
+    if env:
+        return env
+    return "<this project's folder on your computer>" if IN_DOCKER else str(ROOT)
+
+
 def schedule_prompt():
-    return (f"Open the folder {ROOT} and follow AGENT.md in it: run Phase A (search and prepare), "
+    return (f"Open the folder {host_folder()} and follow AGENT.md in it: run Phase A (search and prepare), "
             "write the run report, then stop and wait for my approval before sending anything.")
+
+
+# ---------- uploads (setup wizard) ----------
+
+def docx_text(data: bytes, limit=20000):
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        xml = z.read("word/document.xml").decode("utf-8", "replace")
+    paras = re.findall(r"<w:p[ >].*?</w:p>", xml, re.S)
+    out = "\n".join(htmllib.unescape("".join(re.findall(r"<w:t(?:\s[^>]*)?>([^<]*)</w:t>", p))) for p in paras)
+    return out.strip()[:limit]
+
+
+def check_docx(data: bytes):
+    """A real Word file: a zip with word/document.xml, not huge when unpacked (zip bombs),
+    no DTDs and no links to local files or network shares (LibreOffice/Word could follow them)."""
+    too_big = "This .docx is unusually large inside. Re-save it in Word and try again."
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            infos = z.infolist()
+            if len(infos) > 2000 or sum(i.file_size for i in infos) > 100_000_000:
+                raise ValueError(too_big)
+            if "word/document.xml" not in z.namelist():
+                raise ValueError("This is not a Word document (.docx).")
+            with z.open("word/document.xml") as f:  # the header's size can lie: read with a hard cap
+                xml = f.read(MAX_XML + 1)
+            if len(xml) > MAX_XML:
+                raise ValueError(too_big)
+            if b"<!DOCTYPE" in xml or b"<!ENTITY" in xml:
+                raise ValueError("This .docx has unusual content. Re-save it in Word and try again.")
+            for name in z.namelist():
+                if name.endswith(".rels"):
+                    with z.open(name) as f:
+                        rels = f.read(1_000_001).decode("utf-8", "replace")
+                    for target in re.findall(r'Target="([^"]*)"[^>]*TargetMode="External"', rels) + \
+                            re.findall(r'TargetMode="External"[^>]*Target="([^"]*)"', rels):
+                        t = target.strip().lower().replace("\\", "/")
+                        if not t.startswith(("http://", "https://", "mailto:")):
+                            raise ValueError("This .docx links to a local file or network share. "
+                                             "Remove that link (or re-save the file) and try again.")
+    except zipfile.BadZipFile:
+        raise ValueError("This is not a Word document (.docx).")
+
+
+def read_skills(target: Path, heading: str):
+    code, out, err = run_tool(["tools/tailor_resume.py", f"--docx={target}", f"--heading={heading}", "--list"],
+                              timeout=60)
+    if code == 0:
+        return {"skills": json.loads(out), "skills_error": None}
+    return {"skills": None, "skills_error": (err or out).strip()[-500:]}
+
+
+def check_heading(heading):
+    if not isinstance(heading, str) or not heading.strip() or len(heading) > 100 or CONTROL.search(heading):
+        raise ValueError("Bad skills heading.")
+    return heading.strip()
+
+
+def save_upload(body):
+    """Save a resume or cover letter from the setup wizard into uploads/. Returns info for the UI."""
+    kind = body.get("kind")
+    if kind not in UPLOAD_KINDS:
+        raise ValueError("Unknown file kind.")
+    name = body.get("filename")
+    ext = Path(name).suffix.lower() if isinstance(name, str) else ""
+    if ext not in UPLOAD_KINDS[kind]:
+        raise ValueError(f"Choose a {' / '.join(sorted(UPLOAD_KINDS[kind]))} file.")
+    variant = body.get("variant") or "default"
+    if not isinstance(variant, str) or not VARIANT_NAME.fullmatch(variant):
+        raise ValueError("Bad resume version name.")
+    data = body.get("data")
+    if not isinstance(data, str):
+        raise ValueError("The file could not be read.")
+    try:
+        data = base64.b64decode(data, validate=True)
+    except ValueError:
+        raise ValueError("The file could not be read.")
+    if not data:
+        raise ValueError("The file is empty.")
+    if len(data) > MAX_FILE:
+        raise ValueError("The file is larger than 5 MB.")
+    info = {}
+    if ext == ".docx":
+        check_docx(data)
+    elif ext == ".pdf" and not data.startswith(b"%PDF"):
+        raise ValueError("This is not a PDF file.")
+    elif ext in (".txt", ".md"):
+        try:
+            info["text"] = data.decode("utf-8-sig")[:20000]
+        except UnicodeDecodeError:
+            raise ValueError("Save the text file as UTF-8 and try again.")
+    heading = check_heading(body.get("heading") or "Technical Skills") if kind == "resume" else None
+    # Our own file names only: nothing from the uploaded file name reaches the disk path.
+    target = UPLOAD_DIR / (f"resume-{variant}.docx" if kind == "resume" else f"cover-letter{ext}")
+    with _tool_lock:
+        UPLOAD_DIR.mkdir(exist_ok=True)
+        if kind == "cover_letter":
+            for old in UPLOAD_DIR.glob("cover-letter.*"):
+                old.unlink()
+        target.write_bytes(data)
+    info["path"] = target.relative_to(ROOT).as_posix()
+    if kind == "resume":
+        try:
+            info["profile"] = resume_profile.profile(data)  # suggestions for the wizard, from the resume text
+        except Exception:
+            info["profile"] = {}
+        if info["profile"].get("skills_heading"):
+            heading = check_heading(info["profile"]["skills_heading"])
+        info.update(read_skills(target, heading))
+    elif ext == ".docx":
+        info["text"] = docx_text(data)
+    elif ext == ".pdf":
+        try:
+            from pypdf import PdfReader
+            info["text"] = "\n".join((pg.extract_text() or "") for pg in PdfReader(io.BytesIO(data)).pages[:3])[:20000]
+        except Exception:
+            info["text"] = ""
+    return info
+
+
+def reread_skills(body):
+    """Read an uploaded resume's skills again (after the user changes the heading)."""
+    path, heading = body.get("path"), check_heading(body.get("heading"))
+    if not isinstance(path, str):
+        raise ValueError("Bad request.")
+    target = (ROOT / path).resolve()
+    if not target.is_relative_to(UPLOAD_DIR.resolve()) or target.suffix.lower() != ".docx" or not target.is_file():
+        raise ValueError("Unknown file.")
+    return read_skills(target, heading)
 
 
 # ---------- HTTP ----------
@@ -319,9 +498,15 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _body_limit(self):
+        return MAX_UPLOAD_BODY if urlsplit(self.path).path == "/api/upload" else MAX_BODY
+
     def _json_body(self):
-        n = int(self.headers.get("Content-Length") or 0)
-        if n <= 0 or n > MAX_BODY:
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            raise ValueError("Bad Content-Length.")
+        if n <= 0 or n > self._body_limit():
             raise ValueError("Empty or too large request.")
         return json.loads(self.rfile.read(n).decode("utf-8"))
 
@@ -339,11 +524,14 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/":
                 return self._send(200, (UI_DIR / "index.html").read_bytes(), "text/html; charset=utf-8")
-            if path == "/app.js":
-                return self._send(200, (UI_DIR / "app.js").read_bytes(), "text/javascript; charset=utf-8")
+            if path == "/api/ping":
+                return self._send(200, {"ok": True})
+            if path in ("/app.js", "/setup.js"):
+                return self._send(200, (UI_DIR / path[1:]).read_bytes(), "text/javascript; charset=utf-8")
             if path == "/api/config":
                 cfg, exists = read_config()
-                return self._send(200, {"config": cfg, "exists": exists, "folder": str(ROOT)})
+                return self._send(200, {"config": cfg, "exists": exists, "folder": host_folder(),
+                                        "in_docker": IN_DOCKER, "pdf_engine": pdf_export.engine()})
             if path == "/api/health":
                 return self._send(200, {"items": health()})
             if path == "/api/applications":
@@ -372,7 +560,7 @@ class Handler(BaseHTTPRequestHandler):
                                   {"Content-Disposition": "inline; filename=preview.pdf"})
             if path == "/api/schedule":
                 cfg, _ = read_config()
-                return self._send(200, {"prompt": schedule_prompt(), "folder": str(ROOT), **schedule_info(cfg)})
+                return self._send(200, {"prompt": schedule_prompt(), "folder": host_folder(), **schedule_info(cfg)})
             return self._send(404, {"error": "Not found"})
         except ValueError as e:
             return self._send(400, {"error": str(e)})
@@ -381,9 +569,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if not self._allowed():
-            n = int(self.headers.get("Content-Length") or 0)
-            if 0 < n <= MAX_BODY:
-                self.rfile.read(n)  # drain, so the client gets the 403 instead of a reset
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                n = 0
+            if 0 < n <= 65536:
+                self.rfile.read(n)  # drain small bodies, so the client gets the 403 instead of a reset
             self.close_connection = True
             return self._send(403, {"error": "Forbidden"})
         path = urlsplit(self.path).path
@@ -412,6 +603,19 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, {"ok": False, "error": (err or out).strip()[-2000:]})
                 res = json.loads(out[out.index("{"):])
                 return self._send(200, {"ok": True, "pdf_mb": res.get("pdf_mb"), "warning": res.get("warning")})
+            if path == "/api/upload":
+                if not isinstance(body, dict):
+                    raise ValueError("Bad request.")
+                if not _upload_slots.acquire(blocking=False):
+                    return self._send(429, {"error": "Another upload is in progress. Try again in a moment."})
+                try:
+                    return self._send(200, {"ok": True, **save_upload(body)})
+                finally:
+                    _upload_slots.release()
+            if path == "/api/resume/inspect":
+                if not isinstance(body, dict):
+                    raise ValueError("Bad request.")
+                return self._send(200, {"ok": True, **reread_skills(body)})
             if path == "/api/applications/status":
                 rid, status = str(body.get("id", "")), body.get("status")
                 note = body.get("note", "")
@@ -433,11 +637,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--no-browser", action="store_true")
+    ap.add_argument("--host", default="127.0.0.1",
+                    help="address to listen on; use 0.0.0.0 only inside Docker (publish it on 127.0.0.1)")
     args = ap.parse_args()
-    srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    srv = ThreadingHTTPServer((args.host, args.port), Handler)
     url = f"http://127.0.0.1:{args.port}/"
     print(f"Job-Hunt Agent control panel: {url}  (Ctrl+C to stop)")
-    threading.Thread(target=check_word, daemon=True).start()  # warm up the slow Word check
+    if pdf_export.engine() == "word":
+        threading.Thread(target=check_word, daemon=True).start()  # warm up the slow Word check
     if not args.no_browser:
         webbrowser.open(url)
     try:

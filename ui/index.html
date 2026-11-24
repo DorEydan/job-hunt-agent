@@ -103,7 +103,27 @@ ol.steps li { margin-bottom: 10px; }
 .switch input:checked + span::before { transform: translateX(16px); }
 .switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
 input[type=time] { padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--input); color: var(--text); font: inherit; }
+/* setup wizard */
+body.wizard nav { display: none; }
+body.wizard .layout { grid-template-columns: 1fr; max-width: 860px; }
+.stepper { list-style: none; display: flex; gap: 6px; padding: 0; margin: 6px 0 18px; flex-wrap: wrap; }
+.stepper li { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); padding: 4px 10px 4px 4px; border-radius: 999px; background: var(--chip); }
+.stepper li.on { background: var(--accent); color: var(--accent-text); font-weight: 600; }
+.stepper li.done { color: var(--ok); }
+.stepper li span { white-space: nowrap; }
+.opts { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.opt { display: flex; align-items: center; gap: 8px; margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; color: var(--text); font-size: 14px; }
+.opt:hover { border-color: var(--accent); }
+.opt.on, .opt:has(input:checked) { border-color: var(--accent); background: var(--chip); }
+.wiznav { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 8px 0 30px; }
+#wizmsg { color: var(--bad); text-align: center; flex: 1; }
+.review li { margin: 6px 0; }
+details.card summary { cursor: pointer; }
+input[type=file] { font: inherit; color: var(--text); }
+select { appearance: auto; }
 @media (max-width: 760px) {
+  .stepper li span { display: none; }
+  .stepper li.on span { display: inline; }
   .layout { grid-template-columns: 1fr; }
   nav { position: static; display: flex; overflow-x: auto; gap: 4px; padding: 10px 16px; }
   nav button { width: auto; white-space: nowrap; }
@@ -131,5 +151,6 @@ input[type=time] { padding: 7px 10px; border: 1px solid var(--line); border-radi
 <div class="toast" id="toast"></div>
 
 <script src="/app.js"></script>
+<script src="/setup.js"></script>
 </body>
 </html>

@@ -17,12 +17,13 @@ Usage:
                        remaining items keep their original order.
 --line-order a,b,c     reorders the skill lines themselves (optional).
 --no-pdf               write only the .docx (the PDF is what gets sent).
+--docx PATH --list      read the skill lines of any .docx (used by the setup wizard);
+                       --heading overrides the skills heading.
 """
 import argparse
 import html
 import json
 import re
-import subprocess
 import sys
 import zipfile
 from pathlib import Path
@@ -31,7 +32,7 @@ from xml.sax.saxutils import escape
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import ROOT, load_config, resume_variants  # noqa: E402
 
-CONFIG = load_config()
+CONFIG = load_config(allow_example=any(a.startswith("--docx") for a in sys.argv))
 
 P_RE = re.compile(r"<w:p[ >].*?</w:p>", re.S)
 R_RE = re.compile(r"<w:r[ >].*?</w:r>", re.S)
@@ -138,13 +139,27 @@ def main():
     ap.add_argument("--first", action="append", default=[], metavar="LABEL=a,b,c")
     ap.add_argument("--line-order", help="comma-separated labels")
     ap.add_argument("--no-pdf", action="store_true")
+    ap.add_argument("--docx", help="read this .docx instead of a configured version (with --list)")
+    ap.add_argument("--heading", help="skills heading to look for (default: config skills_heading)")
     variants = resume_variants(CONFIG)
-    if not variants:
+    if not variants and "--docx" not in sys.argv:
         sys.exit("No base resume set. Add one in the setup page (config.json -> base_resumes).")
     ap.add_argument("--variant", choices=sorted(variants), default=None,
                     help="which base resume to use (config.json -> base_resumes); optional if there is only one")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
+    if args.heading:
+        CONFIG["skills_heading"] = args.heading
+    if args.docx:
+        if not args.list:
+            ap.error("--docx works only with --list")
+        base = Path(args.docx)
+        if not base.is_file() or base.suffix.lower() != ".docx":
+            sys.exit(f"Not a .docx file: {base}")
+        with zipfile.ZipFile(base) as z:
+            lines = find_skill_lines(z.read("word/document.xml").decode("utf-8"))
+        print(json.dumps({lbl: items for _, lbl, items in lines}, ensure_ascii=False, indent=2))
+        return
 
     if args.variant is None:
         if len(variants) > 1:
@@ -208,7 +223,7 @@ def main():
     if not out_dir.is_absolute():
         out_dir = ROOT / out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
-    name = safe_name(CONFIG.get("resume_output_name", base.stem))
+    name = safe_name(CONFIG.get("resume_output_name") or base.stem) or "resume"
     docx_path = out_dir / f"{name}.docx"
     with zipfile.ZipFile(base) as src, zipfile.ZipFile(docx_path, "w", zipfile.ZIP_DEFLATED) as dst:
         for info in src.infolist():
@@ -220,14 +235,11 @@ def main():
     result = {"variant": args.variant, "base": str(base), "docx": str(docx_path), "skills": {l: new_items[l] for l in order}}
     if not args.no_pdf:
         pdf_path = out_dir / f"{name}.pdf"
-        ps1 = ROOT / "tools" / "docx_to_pdf.ps1"
-        subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps1),
-             "-Docx", str(docx_path.resolve()), "-Pdf", str(pdf_path.resolve())],
-            check=True,
-        )
-        if not pdf_path.exists() or pdf_path.stat().st_size == 0:
-            sys.exit("PDF export failed.")
+        from pdf_export import export  # Word on Windows, LibreOffice elsewhere (e.g. Docker)
+        try:
+            export(docx_path, pdf_path)
+        except Exception as e:
+            sys.exit(f"PDF export failed: {e}")
         try:
             sys.path.insert(0, str(ROOT / "tools"))
             from shrink_pdf import shrink  # needs the project's .venv (fonttools, pypdf)

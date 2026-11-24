@@ -8,7 +8,9 @@ CONFIG_PATH = ROOT / "config.json"
 EXAMPLE_PATH = ROOT / "config.example.json"
 
 
-def load_config():
+def load_config(allow_example=False):
+    if not CONFIG_PATH.exists() and allow_example:
+        return json.loads(EXAMPLE_PATH.read_text(encoding="utf-8"))
     if not CONFIG_PATH.exists():
         sys.exit("config.json not found. Run start.bat (it creates one from config.example.json "
                  "and opens the setup page), or copy config.example.json to config.json.")
